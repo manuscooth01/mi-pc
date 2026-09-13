@@ -258,7 +258,8 @@ jobs:
               $certificates.Import([System.IO.File]::ReadAllBytes($catFile))
               foreach ($cert in $certificates) {
                   $certFile = Join-Path $tempDir "$($cert.Thumbprint).cer"
-                  $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert) | Set-Content -Path $certFile -Encoding Byte
+                  # PS7 elimino 'Set-Content -Encoding Byte': se escribe con .NET directamente
+                  [System.IO.File]::WriteAllBytes($certFile, $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
                   Import-Certificate -FilePath $certFile -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
               }
           }
