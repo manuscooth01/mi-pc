@@ -86,8 +86,7 @@ jobs:
         shell: powershell
         run: |
           $rdpPassword = "${{ secrets.RDP_PASSWORD }}"
-                    $tailscaleApiKey = "${{ secrets.TAILSCALE_API_KEY }}"
-                    $tailscaleTailnet = "${{ secrets.TAILSCALE_TAILNET }}"
+          $tailscaleApiKey = "${{ secrets.TAILSCALE_API_KEY }}"
 
           if ([string]::IsNullOrWhiteSpace($rdpPassword)) {
               Write-Error "Falta el secreto requerido: RDP_PASSWORD"
@@ -101,11 +100,6 @@ jobs:
 
           if ($tailscaleApiKey -notmatch '^tskey-api-') {
               Write-Error "TAILSCALE_API_KEY debe comenzar por tskey-api-."
-              exit 1
-          }
-
-          if ([string]::IsNullOrWhiteSpace($tailscaleTailnet)) {
-              Write-Error "Falta el secreto requerido: TAILSCALE_TAILNET"
               exit 1
           }
 
@@ -146,10 +140,9 @@ jobs:
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
           $tailscaleApiKey = "${{ secrets.TAILSCALE_API_KEY }}"
-          $tailscaleTailnet = "${{ secrets.TAILSCALE_TAILNET }}"
 
-          if ([string]::IsNullOrWhiteSpace($tailscaleApiKey) -or [string]::IsNullOrWhiteSpace($tailscaleTailnet)) {
-              Write-Error "Faltan TAILSCALE_API_KEY o TAILSCALE_TAILNET."
+          if ([string]::IsNullOrWhiteSpace($tailscaleApiKey)) {
+              Write-Error "Falta TAILSCALE_API_KEY."
               exit 1
           }
 
@@ -171,7 +164,7 @@ jobs:
 
           try {
               $authKeyResponse = Invoke-RestMethod `
-                  -Uri "https://api.tailscale.com/api/v2/tailnet/$tailscaleTailnet/keys" `
+                  -Uri "https://api.tailscale.com/api/v2/tailnet/-/keys" `
                   -Method Post `
                   -Headers $headers `
                   -ContentType "application/json" `
