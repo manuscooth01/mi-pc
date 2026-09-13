@@ -33,19 +33,23 @@ jobs:
 
       - name: Create RDP User with Fixed Password
         shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          $password   = "${{ secrets.RDP_PASSWORD }}"
+          $password = $env:RDP_PASSWORD
+
           if ([string]::IsNullOrWhiteSpace($password)) {
-              Write-Error "El secreto RDP_PASSWORD no está definido en el repositorio."
+              Write-Error "El secreto RDP_PASSWORD esta vacio o no definido."
               exit 1
           }
 
+          Write-Host "Longitud de la contrasena: $($password.Length) caracteres"
+
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Crear el usuario si no existe, o actualizar la contraseña si ya existe
           if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
               Set-LocalUser -Name "RDP" -Password $securePass
-              Write-Host "Usuario RDP ya existía, contraseña actualizada."
+              Write-Host "Usuario RDP ya existia, contrasena actualizada."
           } else {
               New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
               Add-LocalGroupMember -Group "Administrators"       -Member "RDP"
@@ -53,7 +57,6 @@ jobs:
               Write-Host "Usuario RDP creado correctamente."
           }
 
-          # Verificación
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
@@ -99,7 +102,7 @@ jobs:
           & "$tsExe" logout 2>$null
           Remove-Item "$env:ProgramData\Tailscale\tailscaled.state" -Force -ErrorAction SilentlyContinue
 
-          # Bring Tailscale up (unattended = sin interfaz gráfica)
+          # Bring Tailscale up (unattended = sin interfaz grafica)
           & "$tsExe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID" --unattended
 
           # Wait for the Tailscale IPv4 to be assigned
