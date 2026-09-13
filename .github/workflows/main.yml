@@ -127,12 +127,32 @@ jobs:
           }
 
       - name: Install Sunshine (Latest Version)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Obtener el instalador de la última release estable de Sunshine
-          $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
-          $installerUrl = ($releaseInfo.assets | Where-Object { $_.name -like "*WindowsInstaller.exe" }).browser_download_url
-          $installer = Join-Path $env:TEMP "sunshine-installer.exe"
+          $headers = @{ Authorization = "token $env:GH_TOKEN" }
+          $installerUrl = $null
+          
+          try {
+              Write-Host "Fetching latest Sunshine release from GitHub API..."
+              $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest" -Headers $headers -ErrorAction Stop
+              $installerUrl = ($releaseInfo.assets | Where-Object { $_.name -like "*WindowsInstaller.exe" }).browser_download_url
+              
+              if (-not $installerUrl) {
+                  Write-Host "No WindowsInstaller.exe found in the latest release. Assets available:"
+                  $releaseInfo.assets | ForEach-Object { Write-Host " - $($_.name)" }
+              }
+          } catch {
+              Write-Host "API request failed or rate limited. Using fallback URL."
+          }
 
+          # Si la API falló, usamos una URL de respaldo
+          if (-not $installerUrl) {
+              $installerUrl = "https://github.com/LizardByte/Sunshine/releases/download/v0.23.1/sunshine-windows-installer.exe"
+              Write-Host "Using fallback URL: $installerUrl"
+          }
+
+          $installer = Join-Path $env:TEMP "sunshine-installer.exe"
           Write-Host "Downloading Sunshine from: $installerUrl"
           Invoke-WebRequest -Uri $installerUrl -OutFile $installer
           Start-Process $installer -ArgumentList "/S" -Wait
@@ -183,7 +203,6 @@ jobs:
       - name: Create Console-Switch Script
         run: |
           # Mueve la sesión RDP a la consola para que Sunshine pueda capturarla.
-          # ¡CORREGIDO! El script .bat ahora está correctamente indentado.
           $bat = @'
           @echo off
           net session >nul 2>&1
@@ -220,7 +239,8 @@ jobs:
           Write-Host "========================================="
           Write-Host ""
 
-          $deadline = (Get-Date).AddMinutes(330)
+          # Mantener activo 3500 min (margen antes del limite real de GitHub de 6h/360min)
+          $deadline = (Get-Date).AddMinutes(3500)
           while ((Get-Date) -lt $deadline) {
               $left = [int](($deadline - (Get-Date)).TotalMinutes)
               Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP Active - $left min remaining"
