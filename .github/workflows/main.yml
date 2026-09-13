@@ -341,12 +341,17 @@ jobs:
                   Write-Host "Intento $i/5 de verificación HTTPS fallido para $webUrl"
               }
 
+              $global:LASTEXITCODE = 0
               Start-Sleep -Seconds 2
           }
 
           if (-not $httpOk) {
               Write-Warning "La interfaz web de Sunshine aún no respondió ante HTTPS en $webUrl. Esto puede ser por certificado autofirmado, servicio no listo o bloqueo en la red."
           }
+
+          # La comprobación HTTPS es diagnóstica, no debe romper el workflow si el servicio está operativo en el puerto.
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: Maintain Connection & Auto-Restart
         env:
