@@ -1,4 +1,4 @@
-# .github/workflows/main.yml - FAST START
+# .github/workflows/main.yml - GitHub Actions (Windows RDP)
 name: RDP
 
 on:

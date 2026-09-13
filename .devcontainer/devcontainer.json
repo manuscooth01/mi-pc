@@ -1,0 +1,48 @@
+{
+  "name": "Mi PC Virtual - Linux Dev",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+    "ghcr.io/devcontainers/features/go:1": { "version": "1.22" },
+    "ghcr.io/devcontainers/features/rust:1": {},
+    "ghcr.io/devcontainers/features/java:1": { "version": "17" },
+    "ghcr.io/devcontainers/features/dotnet:1": { "version": "8.0" },
+    "ghcr.io/devcontainers/features/kubectl-helm:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-dotnettools.csharp",
+        "golang.go",
+        "rust-lang.rust-analyzer",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "eamodio.gitlens",
+        "github.vscode-github-actions",
+        "redhat.vscode-yaml",
+        "ms-vscode.powershell",
+        "github.copilot",
+        "github.copilot-chat"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "workbench.colorTheme": "Default Dark Modern"
+      }
+    }
+  },
+
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential curl wget git unzip software-properties-common",
+
+  "remoteUser": "vscode"
+}
