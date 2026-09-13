@@ -237,14 +237,29 @@ jobs:
           }
           & $sunshineExe --creds "$env:RDP_USERNAME" "$env:RDP_PASSWORD"
 
-          # Configurar el sink de audio de Sunshine a VB-Cable
-          $sunshineConf = "C:\Program Files\Sunshine\config\sunshine.conf"
+          # Reconfigurar la UI y puerto para que la web quede accesible en localhost y via Tailscale
+          $configDir = "C:\ProgramData\Sunshine\config"
+          New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+          $sunshineConf = Join-Path $configDir "sunshine.conf"
+
+          $configLines = @(
+              "port = 47990",
+              "origin_web_ui_allowed = *",
+              "audio_sink = CABLE Input"
+          )
+
           if (Test-Path $sunshineConf) {
-              Add-Content -Path $sunshineConf -Value "audio_sink = CABLE Input"
-              Write-Host "Sunshine audio sink set to 'CABLE Input'."
+              $existing = Get-Content -Path $sunshineConf -ErrorAction SilentlyContinue
+              foreach ($line in $configLines) {
+                  if (-not ($existing -match "^" + [regex]::Escape(($line.Split('=')[0].Trim())) + "\s*=")) {
+                      Add-Content -Path $sunshineConf -Value $line
+                  }
+              }
           } else {
-              Write-Warning "No se encontró sunshine.conf; es posible que la instalación no haya dejado la configuración por defecto."
+              $configLines | Set-Content -Path $sunshineConf
           }
+
+          Write-Host "Sunshine config updated at $sunshineConf"
 
           # Firewall para los puertos de Sunshine (solo desde Tailscale)
           netsh advfirewall firewall delete rule name="Sunshine-TCP" 2>$null
@@ -259,6 +274,8 @@ jobs:
               exit 1
           }
 
+          Stop-Service SunshineService -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
           Start-Service SunshineService -ErrorAction Stop
           Start-Sleep -Seconds 10
 
@@ -272,6 +289,10 @@ jobs:
           $probe = Test-NetConnection -ComputerName "127.0.0.1" -Port 47990 -WarningAction SilentlyContinue
           if (-not $probe.TcpTestSucceeded) {
               Write-Error "Sunshine no respondió en localhost:47990. La web no está escuchando."
+              $logPath = "C:\ProgramData\Sunshine\logs\sunshine.log"
+              if (Test-Path $logPath) {
+                  Get-Content -Path $logPath -Tail 200
+              }
               Get-NetTCPConnection -LocalPort 47990 -ErrorAction SilentlyContinue | Format-Table -AutoSize
               exit 1
           }
