@@ -6,25 +6,21 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 350
+    timeout-minutes: 3600
 
     steps:
       - name: Configure Core RDP Settings
         run: |
           # Habilitar Remote Desktop y desactivar NLA (para máxima compatibilidad)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
           # Eliminar regla previa para evitar duplicados
           netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
 
           # Permitir RDP solo desde la red Tailscale (CGNAT 100.64.0.0/10)
-          netsh advfirewall firewall add rule name="RDP-Allow" `
-            dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
+          netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
 
           # Reiniciar el servicio de Escritorio Remoto
           Restart-Service -Name TermService -Force
@@ -161,10 +157,8 @@ jobs:
           # Firewall para los puertos de Sunshine (solo desde Tailscale)
           netsh advfirewall firewall delete rule name="Sunshine-TCP" 2>$null
           netsh advfirewall firewall delete rule name="Sunshine-UDP" 2>$null
-          netsh advfirewall firewall add rule name="Sunshine-TCP" `
-            dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 remoteip=100.64.0.0/10
-          netsh advfirewall firewall add rule name="Sunshine-UDP" `
-            dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
+          netsh advfirewall firewall add rule name="Sunshine-TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 remoteip=100.64.0.0/10
+          netsh advfirewall firewall add rule name="Sunshine-UDP" dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
 
           # Iniciar el servicio Sunshine
           Start-Service SunshineService -ErrorAction SilentlyContinue
@@ -189,15 +183,16 @@ jobs:
       - name: Create Console-Switch Script
         run: |
           # Mueve la sesión RDP a la consola para que Sunshine pueda capturarla.
+          # ¡CORREGIDO! El script .bat ahora está correctamente indentado.
           $bat = @'
-@echo off
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
-    exit /b
-)
-tscon %SESSIONNAME% /dest:console
-'@
+          @echo off
+          net session >nul 2>&1
+          if %errorlevel% neq 0 (
+              powershell -Command "Start-Process '%~f0' -Verb RunAs"
+              exit /b
+          )
+          tscon %SESSIONNAME% /dest:console
+          '@
           Set-Content -Path "C:\Users\Public\Desktop\Switch-to-Moonlight.bat" -Value $bat
           Write-Host "Desktop script created: Switch-to-Moonlight.bat"
 
