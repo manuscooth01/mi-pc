@@ -11,12 +11,18 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
+          # Forzar TLS 1.2 para descargas
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
+          # Prevenir que netsh detenga el script si la regla no existe
+          $ErrorActionPreference = 'Continue'
           netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
           netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
+          $ErrorActionPreference = 'Stop'
 
           $rdpService = Get-Service -Name TermService -ErrorAction SilentlyContinue
           if ($rdpService) {
@@ -70,8 +76,9 @@ jobs:
               exit 1
           }
 
-          echo "RDP_USERNAME=RDPUser" >> $env:GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          # CORRECCIÓN: Add-Content en vez de echo >> para evitar UTF-16 y errores en GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "RDP_USERNAME=RDPUser"
+          Add-Content -Path $env:GITHUB_ENV -Value "RDP_PASSWORD=$password"
 
       - name: Validate Required Secrets and Runtime
         shell: powershell
@@ -123,6 +130,11 @@ jobs:
               exit 1
           }
           Write-Host "Tailscale installed: $tsExe"
+          
+          # CORRECCIÓN: Asegurarse de que el servicio de Tailscale esté corriendo antes de conectar
+          Start-Service -Name Tailscale -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
       - name: Establish Tailscale Connection
@@ -200,7 +212,7 @@ jobs:
               exit 1
           }
 
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tsIP"
           Write-Host "Tailscale IP assigned: $tsIP"
 
       - name: Install VB-Cable (Virtual Audio)
@@ -218,25 +230,22 @@ jobs:
 
       - name: Install Virtual Display Driver (NefCon method)
         run: |
-          # Metodo oficial de la comunidad VDD: NefCon instala el .inf Y crea el
-          # dispositivo root\MttVDD (pnputil solo solo deja el driver en el store).
-          # Basado en: Community Scripts/silent-install.ps1 del repo VirtualDrivers.
           $tempDir = Join-Path $env:TEMP "VDDInstall"
           New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-          # 1) NefCon (device console de Nefarius)
           $nefConUrl = "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip"
           $nefConZip = Join-Path $tempDir "nefcon.zip"
           Write-Host "Downloading NefCon..."
           Invoke-WebRequest -Uri $nefConUrl -OutFile $nefConZip -UseBasicParsing -ErrorAction Stop
           Expand-Archive -Path $nefConZip -DestinationPath $tempDir -Force -ErrorAction Stop
-          $nefConExe = Join-Path $tempDir "x64\nefconw.exe"
+          
+          # CORRECCIÓN: usar nefcon.exe (CLI) en lugar de nefconw.exe (GUI) para evitar cuelgues en CI
+          $nefConExe = Join-Path $tempDir "x64\nefcon.exe"
           if (-not (Test-Path $nefConExe)) {
-              Write-Error "nefconw.exe no encontrado tras extraer el zip."
+              Write-Error "nefcon.exe no encontrado tras extraer el zip."
               exit 1
           }
 
-          # 2) Driver solo (zip del release actual)
           $driverUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest/download/VirtualDisplayDriver-x86.Driver.Only.zip"
           $driverZip = Join-Path $tempDir "driver.zip"
           Write-Host "Downloading Virtual Display Driver..."
@@ -250,7 +259,6 @@ jobs:
               exit 1
           }
 
-          # 3) Importar los certificados del .cat a TrustedPublisher (evita bloqueo de driver firmado)
           $catFile = Join-Path $tempDir "VirtualDisplayDriver\mttvdd.cat"
           if (Test-Path $catFile) {
               Write-Host "Installing driver certificates to TrustedPublisher..."
@@ -258,13 +266,11 @@ jobs:
               $certificates.Import([System.IO.File]::ReadAllBytes($catFile))
               foreach ($cert in $certificates) {
                   $certFile = Join-Path $tempDir "$($cert.Thumbprint).cer"
-                  # PS7 elimino 'Set-Content -Encoding Byte': se escribe con .NET directamente
                   [System.IO.File]::WriteAllBytes($certFile, $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
                   Import-Certificate -FilePath $certFile -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
               }
           }
 
-          # 4) Instalar driver + crear dispositivo root\MttVDD
           Write-Host "Installing Virtual Display Driver (Root\MttVDD) via NefCon..."
           Push-Location $tempDir
           & $nefConExe install ".\VirtualDisplayDriver\MttVDD.inf" "Root\MttVDD"
@@ -273,14 +279,12 @@ jobs:
           Write-Host "NefCon exit code: $nefExit"
           Start-Sleep -Seconds 10
 
-          # 5) Verificar que el dispositivo existe y esta presente
           $vdd = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match "Virtual Display" }
           if ($vdd) {
               $vdd | Format-Table -AutoSize
               Write-Host "Virtual Display Driver installed and device present."
           } else {
               Write-Warning "No se detecto el dispositivo 'Virtual Display Driver'. Sunshine capturara pantalla negra."
-              Write-Host "PnP devices con 'MttVDD' en el InstanceId:"
               Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match "MttVDD" } | Format-Table -AutoSize
           }
 
@@ -359,8 +363,11 @@ jobs:
 
           Write-Host "Sunshine config updated at $sunshineConf"
 
+          # CORRECCIÓN: Evitar fallo de paso si la regla no existe
+          $ErrorActionPreference = 'Continue'
           netsh advfirewall firewall delete rule name="Sunshine-TCP" 2>$null
           netsh advfirewall firewall delete rule name="Sunshine-UDP" 2>$null
+          $ErrorActionPreference = 'Stop'
           netsh advfirewall firewall add rule name="Sunshine-TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 remoteip=100.64.0.0/10
           netsh advfirewall firewall add rule name="Sunshine-UDP" dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
 
@@ -486,7 +493,8 @@ jobs:
 
           if ($env:GH_TOKEN) {
               Write-Host "Auto-restarting workflow..."
-              gh workflow run "$env:GITHUB_WORKFLOW" --ref "$env:GITHUB_REF"
+              # CORRECCIÓN: Especificar el repositorio explícitamente para gh CLI
+              gh workflow run "$env:GITHUB_WORKFLOW" --ref "$env:GITHUB_REF" --repo "$env:GITHUB_REPOSITORY"
               Start-Sleep -Seconds 60
           } else {
               Write-Host "Session ends here (no WORKFLOW_PAT)."
