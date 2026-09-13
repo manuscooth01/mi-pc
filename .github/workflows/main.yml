@@ -6,11 +6,12 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 350
+    timeout-minutes: 3600
 
     steps:
       - name: Configure Core RDP Settings
         run: |
+          # Habilitar Remote Desktop y desactivar Network Level Authentication
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -18,30 +19,46 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
+          # Eliminar regla previa para evitar duplicados
           netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
 
+          # Permitir conexiones entrantes por el puerto 3389
           netsh advfirewall firewall add rule name="RDP-Allow" `
             dir=in action=allow protocol=TCP localport=3389
 
+          # Reiniciar el servicio de Escritorio Remoto
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
+        env:
+          FIXED_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))
+          # Si existe el secret RDP_PASSWORD, usarla; si no, generar una aleatoria
+          if ($env:FIXED_PASSWORD) {
+              $password = $env:FIXED_PASSWORD
+              Write-Host "Using fixed password from RDP_PASSWORD secret"
+          } else {
+              $charSet = @{
+                  Upper   = [char[]](65..90)
+                  Lower   = [char[]](97..122)
+                  Number  = [char[]](48..57)
+                  Special = ([char[]](33..47) + [char[]](58..64) +
+                             [char[]](91..96) + [char[]](123..126))
+              }
+              $rawPassword = @()
+              $rawPassword += $charSet.Upper | Get-Random -Count 4
+              $rawPassword += $charSet.Lower | Get-Random -Count 4
+              $rawPassword += $charSet.Number | Get-Random -Count 4
+              $rawPassword += $charSet.Special | Get-Random -Count 4
+              $password = -join ($rawPassword | Sort-Object { Get-Random })
           }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
+          # Limpiar usuario previo si existiera (defensivo)
+          if (Get-LocalUser -Name "RDPUser" -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name "RDPUser"
+          }
+
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
@@ -52,7 +69,6 @@ jobs:
               exit 1
           }
 
-          # Guardar credenciales en variables de entorno del job
           echo "RDP_USERNAME=RDPUser" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
@@ -61,7 +77,7 @@ jobs:
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = Join-Path $env:TEMP "tailscale-setup.msi"
 
-          Write-Host "Downloading Tailscale from: $tsUrl"
+          Write-Host "Downloading Tailscale..."
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
 
           Write-Host "Installing Tailscale..."
@@ -70,10 +86,10 @@ jobs:
           # Verificar instalación
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           if (-not (Test-Path $tsExe)) {
-              Write-Error "Tailscale installation failed - executable not found at $tsExe"
+              Write-Error "Tailscale installation failed - $tsExe not found"
               exit 1
           }
-          Write-Host "Tailscale installed successfully at: $tsExe"
+          Write-Host "Tailscale installed: $tsExe"
 
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
@@ -82,21 +98,21 @@ jobs:
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
 
-          Write-Host "Bringing up Tailscale with hostname: $hostname"
+          Write-Host "Connecting Tailscale as: $hostname"
           & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$hostname --accept-routes
 
-          # Esperar a que Tailscale asigne una IP
+          # Esperar a que Tailscale asigne una IP (hasta 60 segundos)
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 12) {
               Start-Sleep -Seconds 5
-              $tsIP = & $tsExe ip -4 2>$null
+              $tsIP = (& $tsExe ip -4 2>$null) | Select-Object -First 1
               $retries++
-              Write-Host "Attempt $retries - IP: $tsIP"
+              Write-Host "Attempt $retries/12 - IP: $tsIP"
           }
 
-          if (-not $tsIP -or $tsIP -eq "") {
-              Write-Error "Tailscale IP not assigned after 60 seconds."
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned"
               & $tsExe status
               exit 1
           }
@@ -115,20 +131,33 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Maintain Connection
+      - name: Maintain Connection & Auto-Restart
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
         run: |
           Write-Host ""
-          Write-Host "=========================================" -ForegroundColor Cyan
-          Write-Host "         RDP ACCESS INFORMATION          " -ForegroundColor Cyan
-          Write-Host "=========================================" -ForegroundColor Cyan
+          Write-Host "========================================="
           Write-Host "  Address:  $env:TAILSCALE_IP"
           Write-Host "  Port:     3389"
           Write-Host "  Username: $env:RDP_USERNAME"
           Write-Host "  Password: $env:RDP_PASSWORD"
-          Write-Host "=========================================" -ForegroundColor Cyan
+          Write-Host "========================================="
           Write-Host ""
 
-          while ($true) {
-              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP Active - Cancel workflow to terminate"
+          # Mantener activo 330 min (margen antes del limite de GitHub de 6h)
+          $deadline = (Get-Date).AddMinutes(330)
+          while ((Get-Date) -lt $deadline) {
+              $left = [int](($deadline - (Get-Date)).TotalMinutes)
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP Active - $left min remaining"
+              Start-Sleep -Seconds 300
+          }
+
+          # Relanzar el workflow antes de que GitHub mate el runner
+          if ($env:GH_TOKEN) {
+              Write-Host "Auto-restarting workflow..."
+              gh workflow run "$env:GITHUB_WORKFLOW" --ref "$env:GITHUB_REF"
+              Start-Sleep -Seconds 60
+          } else {
+              Write-Host "WARNING: WORKFLOW_PAT not configured - session ends here"
               Start-Sleep -Seconds 300
           }
