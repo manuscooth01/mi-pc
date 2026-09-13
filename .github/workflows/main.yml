@@ -6,23 +6,18 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 330
 
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Habilitar Remote Desktop y desactivar NLA (para máxima compatibilidad)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
-          # Eliminar regla previa para evitar duplicados
           netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
-
-          # Permitir RDP solo desde la red Tailscale (CGNAT 100.64.0.0/10)
           netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
 
-          # Reiniciar el servicio de Escritorio Remoto si está disponible.
           $rdpService = Get-Service -Name TermService -ErrorAction SilentlyContinue
           if ($rdpService) {
               try {
@@ -33,9 +28,7 @@ jobs:
                   Write-Host "RDP service restarted successfully."
               } catch {
                   Write-Warning "No se pudo reiniciar TermService: $($_.Exception.Message)"
-                  try {
-                      Start-Service -Name TermService -ErrorAction SilentlyContinue
-                  } catch {}
+                  try { Start-Service -Name TermService -ErrorAction SilentlyContinue } catch {}
               }
           } else {
               Write-Warning "TermService no está disponible en este runner. Continuando sin reinicio."
@@ -49,7 +42,6 @@ jobs:
               $password = $env:FIXED_PASSWORD
               Write-Host "Using fixed password from RDP_PASSWORD secret"
           } else {
-              # Generación de contraseña robusta
               $charSet = @{
                   Upper   = [char[]](65..90)
                   Lower   = [char[]](97..122)
@@ -64,7 +56,6 @@ jobs:
               $password = -join ($rawPassword | Sort-Object { Get-Random })
           }
 
-          # Limpiar usuario previo (defensivo)
           if (Get-LocalUser -Name "RDPUser" -ErrorAction SilentlyContinue) {
               Remove-LocalUser -Name "RDPUser"
           }
@@ -112,7 +103,6 @@ jobs:
 
       - name: Install Tailscale (Latest Version)
         run: |
-          # Usar la URL "latest" para obtener siempre la última versión estable
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = Join-Path $env:TEMP "tailscale-setup.msi"
 
@@ -213,14 +203,8 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP assigned: $tsIP"
 
-          $probe = Test-NetConnection -ComputerName $tsIP -Port 443 -WarningAction SilentlyContinue
-          if (-not $probe.TcpTestSucceeded) {
-              Write-Warning "No se pudo comprobar el puerto 443 en $tsIP. La conectividad Tailscale podría aún no estar lista."
-          }
-
       - name: Install VB-Cable (Virtual Audio)
         run: |
-          # VB-Cable es esencial para que Sunshine capture audio en un entorno sin sonido físico.
           $zip = Join-Path $env:TEMP "vbcable.zip"
           Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath "$env:TEMP\vbcable" -Force
@@ -249,24 +233,13 @@ jobs:
                   Where-Object { $_.name -eq "Sunshine-Windows-AMD64-installer.msi" } |
                   Select-Object -First 1
               $installerUrl = $installerAsset.browser_download_url
-
-              if (-not $installerUrl) {
-                  Write-Host "No AMD64 MSI found in the latest release. Assets available:"
-                  $releaseInfo.assets | ForEach-Object { Write-Host " - $($_.name)" }
-              }
           } catch {
               Write-Host "API request failed or rate limited. Using fallback URL."
           }
 
-          # El endpoint latest/download sigue la versión estable actual sin fijar un tag antiguo.
           if (-not $installerUrl) {
               $installerUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi"
               Write-Host "Using fallback URL: $installerUrl"
-          }
-
-          if ([string]::IsNullOrWhiteSpace($installerUrl)) {
-              Write-Error "No se pudo determinar la URL del instalador de Sunshine."
-              exit 1
           }
 
           $installer = Join-Path $env:TEMP "sunshine-installer.msi"
@@ -278,11 +251,6 @@ jobs:
               throw
           }
 
-          if (-not (Test-Path $installer)) {
-              Write-Error "El instalador de Sunshine no existe tras la descarga."
-              exit 1
-          }
-
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
 
           $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
@@ -292,14 +260,12 @@ jobs:
           }
           Write-Host "Sunshine installed."
 
-          # Configurar credenciales de la interfaz web de Sunshine
           if ([string]::IsNullOrWhiteSpace($env:RDP_USERNAME) -or [string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
               Write-Error "Faltan credenciales locales de Sunshine. No se puede continuar."
               exit 1
           }
           & $sunshineExe --creds "$env:RDP_USERNAME" "$env:RDP_PASSWORD"
 
-          # Reconfigurar la UI y puerto para que la web quede accesible en localhost y via Tailscale
           $configDir = "C:\ProgramData\Sunshine\config"
           New-Item -ItemType Directory -Path $configDir -Force | Out-Null
           $sunshineConf = Join-Path $configDir "sunshine.conf"
@@ -307,7 +273,7 @@ jobs:
           $configLines = @(
               "port = 47990",
               "origin_web_ui_allowed = *",
-              "audio_sink = CABLE Input"
+              "audio_sink = CABLE Input (VB-Audio Virtual Cable)"
           )
 
           if (Test-Path $sunshineConf) {
@@ -323,20 +289,17 @@ jobs:
 
           Write-Host "Sunshine config updated at $sunshineConf"
 
-          # Firewall para los puertos de Sunshine (solo desde Tailscale)
           netsh advfirewall firewall delete rule name="Sunshine-TCP" 2>$null
           netsh advfirewall firewall delete rule name="Sunshine-UDP" 2>$null
           netsh advfirewall firewall add rule name="Sunshine-TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 remoteip=100.64.0.0/10
           netsh advfirewall firewall add rule name="Sunshine-UDP" dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
 
-          # Iniciar el servicio Sunshine y validar que realmente está activo
           $service = Get-Service -Name SunshineService -ErrorAction SilentlyContinue
           if (-not $service) {
               Write-Error "No existe el servicio SunshineService tras la instalación."
               exit 1
           }
 
-          # Detener sin quedar bloqueado si Sunshine no responde al control SCM.
           sc.exe stop SunshineService | Out-Host
           $stopDeadline = (Get-Date).AddSeconds(30)
           do {
@@ -370,7 +333,6 @@ jobs:
               if (Test-Path $logPath) {
                   Get-Content -Path $logPath -Tail 200
               }
-              Get-NetTCPConnection -LocalPort 47990 -ErrorAction SilentlyContinue | Format-Table -AutoSize
               exit 1
           }
 
@@ -378,24 +340,46 @@ jobs:
 
       - name: Install Virtual Display Driver (IDD)
         run: |
-          # Instala el driver que permite a Sunshine capturar una pantalla sin monitor físico.
+          # CORREGIDO: el release 25.7.23+ ya no incluye .bat; busca .bat/.cmd/.ps1 y usa fallback pnputil.
           $vddZip = Join-Path $env:TEMP "vdd.zip"
           $vddUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest/download/VirtualDisplayDriver-x86.Driver.Only.zip"
-          Invoke-WebRequest -Uri $vddUrl -OutFile $vddZip
+          Invoke-WebRequest -Uri $vddUrl -OutFile $vddZip -UseBasicParsing
           Expand-Archive $vddZip -DestinationPath "$env:TEMP\vdd" -Force
 
-          $installer = Get-ChildItem "$env:TEMP\vdd" -Recurse -Filter "*.bat" | Where-Object { $_.Name -like "*install*" } | Select-Object -First 1
+          Write-Host "Contents of driver package:"
+          Get-ChildItem "$env:TEMP\vdd" -Recurse | Select-Object FullName | Format-Table -AutoSize
+
+          $installer = Get-ChildItem "$env:TEMP\vdd" -Recurse -Include "*.bat","*.cmd","*.ps1" -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'install' } | Select-Object -First 1
+
+          $installed = $false
           if ($installer) {
-              Write-Host "Running Virtual Display Driver installer..."
-              Start-Process $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+              Write-Host "Running installer: $($installer.FullName)"
+              if ($installer.Extension -eq ".ps1") {
+                  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer.FullName
+              } else {
+                  & cmd.exe /c "`"$($installer.FullName)`""
+              }
+              if ($LASTEXITCODE -eq 0) { $installed = $true }
+          }
+
+          if (-not $installed) {
+              Write-Host "No install script found or it failed; falling back to pnputil..."
+              $inf = Get-ChildItem "$env:TEMP\vdd" -Recurse -Filter "*.inf" | Select-Object -First 1
+              if ($inf) {
+                  pnputil /add-driver "$($inf.FullName)" /install
+                  if ($LASTEXITCODE -eq 0) { $installed = $true }
+              }
+          }
+
+          if ($installed) {
               Write-Host "Virtual Display Driver installed."
           } else {
-              Write-Host "WARNING: Virtual Display Driver installer not found. Screen capture may be black."
+              Write-Warning "Virtual Display Driver install FAILED. Sunshine capture will be black."
           }
 
       - name: Create Console-Switch Script
         run: |
-          # Mueve la sesión RDP a la consola para que Sunshine pueda capturarla.
           $bat = @'
           @echo off
           net session >nul 2>&1
@@ -424,31 +408,25 @@ jobs:
               }
           }
 
+          # CORREGIDO: Invoke-WebRequest con -SkipCertificateCheck (PS7) tolera el cert autofirmado
+          # y da mas tiempo a Sunshine para generar el certificado al primer arranque.
           $webUrl = "https://$($env:TAILSCALE_IP):47990"
           $httpOk = $false
-
-          for ($i = 1; $i -le 10; $i++) {
+          for ($i = 1; $i -le 15; $i++) {
               try {
-                  curl.exe -k -f -sS -o NUL --max-time 10 $webUrl 2>$null
-                  if ($LASTEXITCODE -eq 0) {
-                      $httpOk = $true
-                      Write-Host "Sunshine web endpoint responded successfully on HTTPS."
-                      break
-                  }
+                  Invoke-WebRequest -Uri $webUrl -Method Head -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop | Out-Null
+                  $httpOk = $true
+                  Write-Host "Sunshine web endpoint responded on HTTPS (attempt $i)."
+                  break
               } catch {
-                  Write-Host "Intento $i/10 de verificación HTTPS fallido para $webUrl"
+                  Write-Host "Intento $i/15 fallido para $webUrl : $($_.Exception.Message)"
+                  Start-Sleep -Seconds 3
               }
-
-              $global:LASTEXITCODE = 0
-              Start-Sleep -Seconds 2
           }
 
           if (-not $httpOk) {
-              Write-Warning "La interfaz web de Sunshine aún no respondió ante HTTPS en $webUrl. Esto puede ser por certificado autofirmado, servicio no listo o bloqueo en la red."
+              Write-Warning "La web de Sunshine no respondio a HTTPS. El servicio SI escucha en 47990; esto suele ser el certificado autofirmado. Prueba abrir la URL directamente en el navegador."
           }
-
-          # La comprobación HTTPS es diagnóstica, no debe romper el workflow si el servicio está operativo en el puerto.
-          $global:LASTEXITCODE = 0
           exit 0
 
       - name: Maintain Connection & Auto-Restart
@@ -467,8 +445,12 @@ jobs:
           Write-Host "========================================="
           Write-Host ""
 
-          # Mantener activo 3500 min (margen antes del limite real de GitHub de 6h/360min)
-          $deadline = (Get-Date).AddMinutes(3500)
+          # 320 min: margen seguro bajo el limite duro de 360 min de los runners GitHub-hosted.
+          if (-not $env:GH_TOKEN) {
+              Write-Warning "WORKFLOW_PAT no configurado: la sesion terminara sin auto-reinicio. Crea el secreto WORKFLOW_PAT (PAT con permiso actions:write) para sesiones renovables."
+          }
+
+          $deadline = (Get-Date).AddMinutes(320)
           while ((Get-Date) -lt $deadline) {
               $left = [int](($deadline - (Get-Date)).TotalMinutes)
               Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP Active - $left min remaining"
@@ -480,6 +462,5 @@ jobs:
               gh workflow run "$env:GITHUB_WORKFLOW" --ref "$env:GITHUB_REF"
               Start-Sleep -Seconds 60
           } else {
-              Write-Host "WARNING: WORKFLOW_PAT not configured - session ends here"
-              Start-Sleep -Seconds 300
+              Write-Host "Session ends here (no WORKFLOW_PAT)."
           }
