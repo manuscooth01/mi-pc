@@ -427,16 +427,16 @@ jobs:
           $webUrl = "https://$($env:TAILSCALE_IP):47990"
           $httpOk = $false
 
-          for ($i = 1; $i -le 5; $i++) {
+          for ($i = 1; $i -le 10; $i++) {
               try {
-                  $curl = curl.exe -k -I --max-time 10 $webUrl 2>$null
-                  if ($LASTEXITCODE -eq 0 -and $curl) {
+                  curl.exe -k -f -sS -o NUL --max-time 10 $webUrl 2>$null
+                  if ($LASTEXITCODE -eq 0) {
                       $httpOk = $true
                       Write-Host "Sunshine web endpoint responded successfully on HTTPS."
                       break
                   }
               } catch {
-                  Write-Host "Intento $i/5 de verificación HTTPS fallido para $webUrl"
+                  Write-Host "Intento $i/10 de verificación HTTPS fallido para $webUrl"
               }
 
               $global:LASTEXITCODE = 0
