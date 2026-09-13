@@ -22,6 +22,7 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          HOURS: ${{ inputs.hours }}
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           $start = Get-Date
@@ -92,22 +93,36 @@ jobs:
           Write-Host "Puerto:   3389"
           Write-Host "==============="
 
-          # --- KEEP ALIVE (robusto) ---
-          $end = (Get-Date).AddHours([int]$env:hours)
+          # --- KEEP ALIVE EN PRIMER PLANO (NUNCA COMPLETA SOLO) ---
+          # Eliminado el "SESSION FINALIZADA" / "Complete job"
+          # Ahora el servidor queda corriendo en primer plano infinitamente
+          # hasta que lo canceles manualmente o se alcance timeout-minutes: 360
+
+          $hours = [int]$env:HOURS
+          if (-not $hours -or $hours -le 0) { $hours = 6 }
+          $end = (Get-Date).AddHours($hours)
           $errors = 0
-          while ((Get-Date) -lt $end) {
+
+          Write-Host "`n=== SERVIDOR EN EJECUCION CONTINUA (PRIMER PLANO) ==="
+          Write-Host "Duracion solicitada: $hours horas (hasta $end)"
+          Write-Host "El job NO terminara solo - queda en primer plano activo"
+          Write-Host "Para detenerlo: cancela el workflow manualmente en Actions"
+          Write-Host "Timeout maximo GitHub: 360 minutos (6h)"
+          Write-Host "====================================================`n"
+
+          while ($true) {
             $tsExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
             
             # Verificar Tailscale sigue activo
             $tsUp = $false
             try {
               $status = & $tsExe status 2>$null
-              if ($status -match "Connected") { $tsUp = $true }
+              if ($status -match "Connected|100\.") { $tsUp = $true }
             } catch {}
             
             if (-not $tsUp) {
               $errors++
-              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] WARN: Tailscale caído ($errors errores). Reconectando..."
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] WARN: Tailscale caido ($errors errores). Reconectando..."
               try {
                 & $tsExe up --authkey=$env:TS_KEY --hostname="gha-$env:GITHUB_RUN_ID" --unattended --accept-routes 2>$null
                 Start-Sleep 10
@@ -118,9 +133,13 @@ jobs:
               }
             }
             
-            $remaining = [math]::Round((($end - (Get-Date)).TotalMinutes),0)
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Up | IP: $ip | Tailscale: $tsUp | Restan: ${remaining}min | Errores: $errors"
+            # Calculo tiempo restante informativo (no detiene el servidor)
+            if ((Get-Date) -lt $end) {
+              $remaining = [math]::Round((($end - (Get-Date)).TotalMinutes),0)
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RUNNING | IP: $ip | Tailscale: $tsUp | Restan: ${remaining}min (config ${hours}h) | Errores: $errors"
+            } else {
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RUNNING (tiempo solicitado superado, SIGUE ACTIVO en primer plano) | IP: $ip | Tailscale: $tsUp | Errores: $errors"
+            }
             
             Start-Sleep 300
           }
-          Write-Host "`n=== SESSION FINALIZADA ==="
