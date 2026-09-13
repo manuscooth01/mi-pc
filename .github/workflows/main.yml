@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Habilitar Remote Desktop y desactivar Network Level Authentication
+          # Habilitar Remote Desktop y desactivar NLA (para máxima compatibilidad)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -22,7 +22,7 @@ jobs:
           # Eliminar regla previa para evitar duplicados
           netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
 
-          # Permitir conexiones entrantes por el puerto 3389 (solo red Tailscale)
+          # Permitir RDP solo desde la red Tailscale (CGNAT 100.64.0.0/10)
           netsh advfirewall firewall add rule name="RDP-Allow" `
             dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
 
@@ -33,17 +33,16 @@ jobs:
         env:
           FIXED_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          # Si existe el secret RDP_PASSWORD, usarla; si no, generar una aleatoria
           if ($env:FIXED_PASSWORD) {
               $password = $env:FIXED_PASSWORD
               Write-Host "Using fixed password from RDP_PASSWORD secret"
           } else {
+              # Generación de contraseña robusta
               $charSet = @{
                   Upper   = [char[]](65..90)
                   Lower   = [char[]](97..122)
                   Number  = [char[]](48..57)
-                  Special = ([char[]](33..47) + [char[]](58..64) + `
-                             [char[]](91..96) + [char[]](123..126))
+                  Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
               }
               $rawPassword = @()
               $rawPassword += $charSet.Upper | Get-Random -Count 4
@@ -53,7 +52,7 @@ jobs:
               $password = -join ($rawPassword | Sort-Object { Get-Random })
           }
 
-          # Limpiar usuario previo si existiera (defensivo)
+          # Limpiar usuario previo (defensivo)
           if (Get-LocalUser -Name "RDPUser" -ErrorAction SilentlyContinue) {
               Remove-LocalUser -Name "RDPUser"
           }
@@ -63,7 +62,6 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
 
-          # Verificar que el usuario fue creado
           if (-not (Get-LocalUser -Name "RDPUser" -ErrorAction SilentlyContinue)) {
               Write-Error "User creation failed"
               exit 1
@@ -72,9 +70,10 @@ jobs:
           echo "RDP_USERNAME=RDPUser" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-      - name: Install Tailscale
+      - name: Install Tailscale (Latest Version)
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          # Usar la URL "latest" para obtener siempre la última versión estable
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = Join-Path $env:TEMP "tailscale-setup.msi"
 
           Write-Host "Downloading Tailscale..."
@@ -83,14 +82,12 @@ jobs:
           Write-Host "Installing Tailscale..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
 
-          # Verificar instalación
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           if (-not (Test-Path $tsExe)) {
-              Write-Error "Tailscale installation failed - $tsExe not found"
+              Write-Error "Tailscale installation failed"
               exit 1
           }
           Write-Host "Tailscale installed: $tsExe"
-
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
       - name: Establish Tailscale Connection
@@ -101,7 +98,6 @@ jobs:
           Write-Host "Connecting Tailscale as: $hostname"
           & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$hostname --accept-routes
 
-          # Esperar a que Tailscale asigne una IP (hasta 60 segundos)
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 12) {
@@ -120,11 +116,29 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP assigned: $tsIP"
 
-      - name: Install Sunshine (servidor de Moonlight)
+      - name: Install VB-Cable (Virtual Audio)
         run: |
-          # Descargar e instalar Sunshine
+          # VB-Cable es esencial para que Sunshine capture audio en un entorno sin sonido físico.
+          $zip = Join-Path $env:TEMP "vbcable.zip"
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:TEMP\vbcable" -Force
+          $setup = Get-ChildItem "$env:TEMP\vbcable" -Recurse -Filter "*Setup_x64.exe" | Select-Object -First 1
+          if ($setup) {
+              Start-Process $setup.FullName -ArgumentList "-i","-h" -Wait
+              Write-Host "VB-Cable installed successfully."
+          } else {
+              Write-Host "WARNING: VB-Cable setup not found. Audio may not work."
+          }
+
+      - name: Install Sunshine (Latest Version)
+        run: |
+          # Obtener el instalador de la última release estable de Sunshine
+          $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+          $installerUrl = ($releaseInfo.assets | Where-Object { $_.name -like "*WindowsInstaller.exe" }).browser_download_url
           $installer = Join-Path $env:TEMP "sunshine-installer.exe"
-          Invoke-WebRequest -Uri "https://github.com/LizardByte/Sunshine/releases/download/v0.23.1/sunshine-windows-installer.exe" -OutFile $installer
+
+          Write-Host "Downloading Sunshine from: $installerUrl"
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installer
           Start-Process $installer -ArgumentList "/S" -Wait
 
           $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
@@ -132,11 +146,19 @@ jobs:
               Write-Error "Sunshine installation failed"
               exit 1
           }
+          Write-Host "Sunshine installed."
 
-          # Credenciales del panel web de Sunshine (mismas que RDP)
+          # Configurar credenciales de la interfaz web de Sunshine
           & $sunshineExe --creds "$env:RDP_USERNAME" "$env:RDP_PASSWORD"
 
-          # Puertos de Sunshine - solo desde la red Tailscale
+          # Configurar el sink de audio de Sunshine a VB-Cable
+          $sunshineConf = "C:\Program Files\Sunshine\config\sunshine.conf"
+          if (Test-Path $sunshineConf) {
+              Add-Content -Path $sunshineConf -Value "audio_sink = CABLE Input"
+              Write-Host "Sunshine audio sink set to 'CABLE Input'."
+          }
+
+          # Firewall para los puertos de Sunshine (solo desde Tailscale)
           netsh advfirewall firewall delete rule name="Sunshine-TCP" 2>$null
           netsh advfirewall firewall delete rule name="Sunshine-UDP" 2>$null
           netsh advfirewall firewall add rule name="Sunshine-TCP" `
@@ -144,27 +166,29 @@ jobs:
           netsh advfirewall firewall add rule name="Sunshine-UDP" `
             dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
 
-          # Iniciar el servicio de Sunshine
+          # Iniciar el servicio Sunshine
           Start-Service SunshineService -ErrorAction SilentlyContinue
-          Write-Host "Sunshine instalado y corriendo"
+          Write-Host "Sunshine service started."
 
-      - name: Install VB-Cable (audio virtual)
+      - name: Install Virtual Display Driver (IDD)
         run: |
-          # Windows Server no tiene tarjeta de sonido; sin esto no habria audio
-          $zip = Join-Path $env:TEMP "vbcable.zip"
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile $zip
-          Expand-Archive $zip -DestinationPath "$env:TEMP\vbcable" -Force
-          $setup = Get-ChildItem "$env:TEMP\vbcable" -Recurse -Filter "*Setup_x64.exe" | Select-Object -First 1
-          if ($setup) {
-              Start-Process $setup.FullName -ArgumentList "-i","-h" -Wait
-              Write-Host "VB-Cable instalado"
+          # Instala el driver que permite a Sunshine capturar una pantalla sin monitor físico.
+          $vddZip = Join-Path $env:TEMP "vdd.zip"
+          Invoke-WebRequest -Uri "https://github.com/qianwei-github/Virtual-Display-Driver/releases/download/v23.10.19/VirtualDisplayDriver.zip" -OutFile $vddZip
+          Expand-Archive $vddZip -DestinationPath "$env:TEMP\vdd" -Force
+
+          $installer = Get-ChildItem "$env:TEMP\vdd" -Recurse -Filter "*.bat" | Where-Object { $_.Name -like "*install*" } | Select-Object -First 1
+          if ($installer) {
+              Write-Host "Running Virtual Display Driver installer..."
+              Start-Process $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+              Write-Host "Virtual Display Driver installed."
           } else {
-              Write-Host "AVISO: no se encontro el setup de VB-Cable (habra video sin audio)"
+              Write-Host "WARNING: Virtual Display Driver installer not found. Screen capture may be black."
           }
 
       - name: Create Console-Switch Script
         run: |
-          # Mueve la sesion RDP a la consola para que Sunshine pueda capturarla
+          # Mueve la sesión RDP a la consola para que Sunshine pueda capturarla.
           $bat = @'
 @echo off
 net session >nul 2>&1
@@ -175,14 +199,14 @@ if %errorlevel% neq 0 (
 tscon %SESSIONNAME% /dest:console
 '@
           Set-Content -Path "C:\Users\Public\Desktop\Switch-to-Moonlight.bat" -Value $bat
-          Write-Host "Script creado en el escritorio: Switch-to-Moonlight.bat"
+          Write-Host "Desktop script created: Switch-to-Moonlight.bat"
 
       - name: Verify Ports
         run: |
-          Write-Host "Verificando puertos..."
+          Write-Host "Verifying ports..."
           foreach ($port in 3389, 47990) {
               $r = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port $port -WarningAction SilentlyContinue
-              Write-Host "Puerto ${port}: $(if ($r.TcpTestSucceeded) {'OK'} else {'FAIL'})"
+              Write-Host "Port ${port}: $(if ($r.TcpTestSucceeded) {'OK'} else {'FAIL'})"
           }
 
       - name: Maintain Connection & Auto-Restart
@@ -191,17 +215,16 @@ tscon %SESSIONNAME% /dest:console
         run: |
           Write-Host ""
           Write-Host "========================================="
-          Write-Host "         DATOS DE CONEXION"
+          Write-Host "         CONNECTION DETAILS"
           Write-Host "========================================="
           Write-Host "  Address:  $env:TAILSCALE_IP"
           Write-Host "  Port:     3389"
           Write-Host "  Username: $env:RDP_USERNAME"
           Write-Host "  Password: $env:RDP_PASSWORD"
-          Write-Host "  Web UI Sunshine: https://$($env:TAILSCALE_IP):47990"
+          Write-Host "  Sunshine Web UI: https://$($env:TAILSCALE_IP):47990"
           Write-Host "========================================="
           Write-Host ""
 
-          # Mantener activo 330 min (margen antes del limite de GitHub de 6h)
           $deadline = (Get-Date).AddMinutes(330)
           while ((Get-Date) -lt $deadline) {
               $left = [int](($deadline - (Get-Date)).TotalMinutes)
@@ -209,7 +232,6 @@ tscon %SESSIONNAME% /dest:console
               Start-Sleep -Seconds 300
           }
 
-          # Relanzar el workflow antes de que GitHub mate el runner
           if ($env:GH_TOKEN) {
               Write-Host "Auto-restarting workflow..."
               gh workflow run "$env:GITHUB_WORKFLOW" --ref "$env:GITHUB_REF"
