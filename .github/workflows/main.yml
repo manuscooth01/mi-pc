@@ -51,9 +51,8 @@ jobs:
 
           # 5. Pagefile 8-16GB fixed
           $cs = Get-CimInstance Win32_ComputerSystem
-          $cs.AutomaticManagedPagefile = $false; $cs.Put()
-          $pf = Get-CimInstance Win32_PageFileSetting
-          $pf.InitialSize = 8192; $pf.MaximumSize = 16384; $pf.Put()
+          Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $false}
+          New-CimInstance -ClassName Win32_PageFileSetting -Property @{InitialSize = 8192; MaximumSize = 16384} -ErrorAction SilentlyContinue | Out-Null
 
           # 6. Expand C:
           try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax } catch {}
