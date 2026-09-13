@@ -66,6 +66,29 @@ jobs:
           echo "RDP_USERNAME=RDPUser" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
+      - name: Validate Required Secrets and Runtime
+        shell: powershell
+        run: |
+          $requiredSecrets = @(
+              'RDP_PASSWORD',
+              'TAILSCALE_AUTH_KEY'
+          )
+
+          foreach ($secretName in $requiredSecrets) {
+              $value = [Environment]::GetEnvironmentVariable($secretName, 'Process')
+              if (-not $value -or [string]::IsNullOrWhiteSpace($value)) {
+                  Write-Error "Falta el secreto requerido: $secretName"
+                  exit 1
+              }
+          }
+
+          if (-not $env:GITHUB_RUN_ID) {
+              Write-Error "No se pudo obtener GITHUB_RUN_ID"
+              exit 1
+          }
+
+          Write-Host "Secrets y entorno verificados correctamente."
+
       - name: Install Tailscale (Latest Version)
         run: |
           # Usar la URL "latest" para obtener siempre la última versión estable
@@ -73,7 +96,12 @@ jobs:
           $installerPath = Join-Path $env:TEMP "tailscale-setup.msi"
 
           Write-Host "Downloading Tailscale..."
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          try {
+              Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -UseBasicParsing
+          } catch {
+              Write-Error "No se pudo descargar Tailscale desde $tsUrl"
+              throw
+          }
 
           Write-Host "Installing Tailscale..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
@@ -90,9 +118,20 @@ jobs:
         run: |
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+
+          if ([string]::IsNullOrWhiteSpace($authKey)) {
+              Write-Error "TAILSCALE_AUTH_KEY está vacío. No se puede conectar a Tailscale."
+              exit 1
+          }
 
           Write-Host "Connecting Tailscale as: $hostname"
-          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$hostname --accept-routes
+          & $tsExe up --authkey=$authKey --hostname=$hostname --accept-routes
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Tailscale no pudo conectarse"
+              & $tsExe status
+              exit $LASTEXITCODE
+          }
 
           $tsIP = $null
           $retries = 0
@@ -109,8 +148,19 @@ jobs:
               exit 1
           }
 
+          $ipParts = $tsIP.Split('.')
+          if ($ipParts.Count -ne 4) {
+              Write-Error "Tailscale IP inválida: $tsIP"
+              exit 1
+          }
+
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP assigned: $tsIP"
+
+          $probe = Test-NetConnection -ComputerName $tsIP -Port 443 -WarningAction SilentlyContinue
+          if (-not $probe.TcpTestSucceeded) {
+              Write-Warning "No se pudo comprobar el puerto 443 en $tsIP. La conectividad Tailscale podría aún no estar lista."
+          }
 
       - name: Install VB-Cable (Virtual Audio)
         run: |
@@ -132,12 +182,12 @@ jobs:
         run: |
           $headers = @{ Authorization = "token $env:GH_TOKEN" }
           $installerUrl = $null
-          
+
           try {
               Write-Host "Fetching latest Sunshine release from GitHub API..."
               $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest" -Headers $headers -ErrorAction Stop
               $installerUrl = ($releaseInfo.assets | Where-Object { $_.name -like "*WindowsInstaller.exe" }).browser_download_url
-              
+
               if (-not $installerUrl) {
                   Write-Host "No WindowsInstaller.exe found in the latest release. Assets available:"
                   $releaseInfo.assets | ForEach-Object { Write-Host " - $($_.name)" }
@@ -152,9 +202,25 @@ jobs:
               Write-Host "Using fallback URL: $installerUrl"
           }
 
+          if ([string]::IsNullOrWhiteSpace($installerUrl)) {
+              Write-Error "No se pudo determinar la URL del instalador de Sunshine."
+              exit 1
+          }
+
           $installer = Join-Path $env:TEMP "sunshine-installer.exe"
           Write-Host "Downloading Sunshine from: $installerUrl"
-          Invoke-WebRequest -Uri $installerUrl -OutFile $installer
+          try {
+              Invoke-WebRequest -Uri $installerUrl -OutFile $installer -UseBasicParsing
+          } catch {
+              Write-Error "La descarga de Sunshine falló: $installerUrl"
+              throw
+          }
+
+          if (-not (Test-Path $installer)) {
+              Write-Error "El instalador de Sunshine no existe tras la descarga."
+              exit 1
+          }
+
           Start-Process $installer -ArgumentList "/S" -Wait
 
           $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
@@ -165,6 +231,10 @@ jobs:
           Write-Host "Sunshine installed."
 
           # Configurar credenciales de la interfaz web de Sunshine
+          if ([string]::IsNullOrWhiteSpace($env:RDP_USERNAME) -or [string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+              Write-Error "Faltan credenciales locales de Sunshine. No se puede continuar."
+              exit 1
+          }
           & $sunshineExe --creds "$env:RDP_USERNAME" "$env:RDP_PASSWORD"
 
           # Configurar el sink de audio de Sunshine a VB-Cable
@@ -172,6 +242,8 @@ jobs:
           if (Test-Path $sunshineConf) {
               Add-Content -Path $sunshineConf -Value "audio_sink = CABLE Input"
               Write-Host "Sunshine audio sink set to 'CABLE Input'."
+          } else {
+              Write-Warning "No se encontró sunshine.conf; es posible que la instalación no haya dejado la configuración por defecto."
           }
 
           # Firewall para los puertos de Sunshine (solo desde Tailscale)
@@ -180,9 +252,31 @@ jobs:
           netsh advfirewall firewall add rule name="Sunshine-TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 remoteip=100.64.0.0/10
           netsh advfirewall firewall add rule name="Sunshine-UDP" dir=in action=allow protocol=UDP localport=47998-48000 remoteip=100.64.0.0/10
 
-          # Iniciar el servicio Sunshine
-          Start-Service SunshineService -ErrorAction SilentlyContinue
-          Write-Host "Sunshine service started."
+          # Iniciar el servicio Sunshine y validar que realmente está activo
+          $service = Get-Service -Name SunshineService -ErrorAction SilentlyContinue
+          if (-not $service) {
+              Write-Error "No existe el servicio SunshineService tras la instalación."
+              exit 1
+          }
+
+          Start-Service SunshineService -ErrorAction Stop
+          Start-Sleep -Seconds 10
+
+          $service = Get-Service -Name SunshineService -ErrorAction Stop
+          if ($service.Status -ne 'Running') {
+              Write-Error "SunshineService no quedó en estado Running. Estado actual: $($service.Status)"
+              Get-Service SunshineService | Format-List *
+              exit 1
+          }
+
+          $probe = Test-NetConnection -ComputerName "127.0.0.1" -Port 47990 -WarningAction SilentlyContinue
+          if (-not $probe.TcpTestSucceeded) {
+              Write-Error "Sunshine no respondió en localhost:47990. La web no está escuchando."
+              Get-NetTCPConnection -LocalPort 47990 -ErrorAction SilentlyContinue | Format-Table -AutoSize
+              exit 1
+          }
+
+          Write-Host "Sunshine service started and verified on port 47990."
 
       - name: Install Virtual Display Driver (IDD)
         run: |
@@ -218,10 +312,25 @@ jobs:
 
       - name: Verify Ports
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_IP)) {
+              Write-Error "TAILSCALE_IP no está definido; no se puede verificar la red."
+              exit 1
+          }
+
           Write-Host "Verifying ports..."
           foreach ($port in 3389, 47990) {
               $r = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port $port -WarningAction SilentlyContinue
               Write-Host "Port ${port}: $(if ($r.TcpTestSucceeded) {'OK'} else {'FAIL'})"
+              if (-not $r.TcpTestSucceeded) {
+                  Write-Warning "Puerto $port no está respondiendo en $env:TAILSCALE_IP. Verifica Firewall/Tailscale."
+              }
+          }
+
+          $tlsCheck = Invoke-WebRequest -Uri "https://$($env:TAILSCALE_IP):47990" -Method Head -SkipCertificateCheck -ErrorAction SilentlyContinue
+          if ($tlsCheck) {
+              Write-Host "Sunshine web endpoint responded successfully on HTTPS."
+          } else {
+              Write-Warning "La interfaz web de Sunshine aún no respondió ante HTTPS en $env:TAILSCALE_IP:47990. Revisa certificados y servicio."
           }
 
       - name: Maintain Connection & Auto-Restart
