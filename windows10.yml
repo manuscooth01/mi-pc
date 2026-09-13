@@ -1,6 +1,7 @@
 # Antes de ejecutar docker-compose up, ejecuta:
 # bash check_github_follow.sh || exit 1
 # Si no sigues a https://github.com/jephersonRD, el entorno no se iniciará.
+
 services:
   windows:
     image: dockurr/windows
@@ -16,8 +17,9 @@ services:
     ports:
       - "8006:8006"
       - "3389:3389/tcp"
+      - "3389:3389/udp" # Añadido UDP para mejorar la conexión RDP
     volumes:
-      - /tmp/docker-data:/mnt/disco1
+      - /tmp/docker-data:/storage # CORREGIDO: dockurr/windows usa /storage por defecto
       - windows-data:/mnt/windows-data
     devices:
       - "/dev/kvm:/dev/kvm"
