@@ -79,17 +79,13 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         shell: powershell
         run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          iex (irm community.chocolatey.org/install.ps1)
-          
-          # Lista en archivo para hash de cache
+          # Chocolatey ya viene instalado en windows-latest
           $tools = @(
             '7zip','git','vscode','notepadplusplus','firefox',
             'nodejs-lts','python','dotnet-8.0-sdk','openjdk17',
             'cmake','ninja','llvm','rust','go','docker-cli'
           )
-          $tools | Out-File .github/tool-list.txt -Encoding utf8
+          choco upgrade chocolatey -y --no-progress --limit-output
           choco install -y $tools --no-progress --limit-output
 
       - name: Setup RDP (No NLA)
