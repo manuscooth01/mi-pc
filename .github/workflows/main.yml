@@ -225,21 +225,43 @@ jobs:
           }
 
       - name: Install Virtual Display Driver (NefCon method)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tempDir = Join-Path $env:TEMP "VDDInstall"
           New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-          # 1) NefCon
-          $nefConUrl = "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip"
+          # 1) NefCon - Obtener dinámicamente la última versión
+          $headers = @{ "User-Agent" = "github-actions-rdp" }
+          if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+              $headers.Authorization = "Bearer $env:GH_TOKEN"
+          }
+          
+          Write-Host "Fetching latest NefCon release..."
+          try {
+              $nefConRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/nefarius/nefcon/releases/latest" -Headers $headers -ErrorAction Stop
+              $nefConAsset = $nefConRelease.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+              if (-not $nefConAsset) {
+                  throw "No se encontró ningún archivo .zip en el release de NefCon."
+              }
+              $nefConUrl = $nefConAsset.browser_download_url
+          } catch {
+              Write-Host "API falló. Usando URL de respaldo genérica."
+              $nefConUrl = "https://github.com/nefarius/nefcon/releases/latest/download/nefcon.zip"
+          }
+
           $nefConZip = Join-Path $tempDir "nefcon.zip"
-          Write-Host "Downloading NefCon..."
+          Write-Host "Downloading NefCon from: $nefConUrl"
           Invoke-WebRequest -Uri $nefConUrl -OutFile $nefConZip -UseBasicParsing -ErrorAction Stop
+          
+          Write-Host "Extracting NefCon..."
           Expand-Archive -Path $nefConZip -DestinationPath $tempDir -Force -ErrorAction Stop
           
-          $nefConExeObj = Get-ChildItem -Path $tempDir -Recurse -Filter "nefcon.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          # Buscar nefcon.exe o nefconw.exe recursivamente
+          $nefConExeObj = Get-ChildItem -Path $tempDir -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "nefcon.exe" -or $_.Name -eq "nefconw.exe" } | Select-Object -First 1
           if (-not $nefConExeObj) {
-              Write-Error "nefcon.exe no encontrado tras extraer el zip."
-              Get-ChildItem $tempDir -Recurse | Select-Object FullName
+              Write-Host "ERROR: nefcon.exe o nefconw.exe no encontrados tras extraer el zip. Listando contenido real extraído para debug:"
+              Get-ChildItem -Path $tempDir -Recurse | Select-Object FullName
               exit 1
           }
           $nefConExe = $nefConExeObj.FullName
@@ -252,16 +274,16 @@ jobs:
           Invoke-WebRequest -Uri $driverUrl -OutFile $driverZip -UseBasicParsing -ErrorAction Stop
           Expand-Archive -Path $driverZip -DestinationPath $tempDir -Force -ErrorAction Stop
 
-          $infPathObj = Get-ChildItem -Path $tempDir -Recurse -Filter "MttVDD.inf" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $infPathObj = Get-ChildItem -Path $tempDir -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "MttVDD.inf" } | Select-Object -First 1
           if (-not $infPathObj) {
-              Write-Error "MttVDD.inf no encontrado en el paquete del driver."
-              Get-ChildItem $tempDir -Recurse | Select-Object FullName
+              Write-Host "ERROR: MttVDD.inf no encontrado. Contenido extraído para debug:"
+              Get-ChildItem -Path $tempDir -Recurse | Select-Object FullName
               exit 1
           }
           $infPath = $infPathObj.FullName
 
           # 3) Certificados
-          $catPathObj = Get-ChildItem -Path $tempDir -Recurse -Filter "mttvdd.cat" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $catPathObj = Get-ChildItem -Path $tempDir -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "mttvdd.cat" } | Select-Object -First 1
           if ($catPathObj) {
               $catFile = $catPathObj.FullName
               Write-Host "Installing driver certificates to TrustedPublisher..."
