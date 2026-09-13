@@ -116,11 +116,9 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         shell: powershell
         run: |
-          # Chocolatey ya viene instalado en windows-latest
+          # SOLO lo necesario - edita esta lista según tu uso
           $tools = @(
-            '7zip','git','vscode','notepadplusplus','firefox',
-            'nodejs-lts','python','dotnet-8.0-sdk','openjdk17',
-            'cmake','ninja','llvm','rust','go','docker-cli'
+            '7zip','git','vscode','firefox'
           )
           choco upgrade chocolatey -y --no-progress --limit-output
           choco install -y $tools --no-progress --limit-output
