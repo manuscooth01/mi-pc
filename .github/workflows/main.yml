@@ -92,9 +92,35 @@ jobs:
           Write-Host "Puerto:   3389"
           Write-Host "==============="
 
-          # --- KEEP ALIVE ---
+          # --- KEEP ALIVE (robusto) ---
           $end = (Get-Date).AddHours([int]$env:hours)
+          $errors = 0
           while ((Get-Date) -lt $end) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Up | IP: $ip"
+            $tsExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+            
+            # Verificar Tailscale sigue activo
+            $tsUp = $false
+            try {
+              $status = & $tsExe status 2>$null
+              if ($status -match "Connected") { $tsUp = $true }
+            } catch {}
+            
+            if (-not $tsUp) {
+              $errors++
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] WARN: Tailscale caído ($errors errores). Reconectando..."
+              try {
+                & $tsExe up --authkey=$env:TS_KEY --hostname="gha-$env:GITHUB_RUN_ID" --unattended --accept-routes 2>$null
+                Start-Sleep 10
+                $tsUp = $true
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] OK: Tailscale reconectado"
+              } catch {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ERROR: No se pudo reconectar Tailscale"
+              }
+            }
+            
+            $remaining = [math]::Round((($end - (Get-Date)).TotalMinutes),0)
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Up | IP: $ip | Tailscale: $tsUp | Restan: ${remaining}min | Errores: $errors"
+            
             Start-Sleep 300
           }
+          Write-Host "`n=== SESSION FINALIZADA ==="
