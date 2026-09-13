@@ -33,35 +33,47 @@ jobs:
       - name: Max Performance Tweaks
         shell: powershell
         run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+
           # 1. Prioridad alta
-          (Get-Process -Id $PID).PriorityClass = "High"
+          try { (Get-Process -Id $PID).PriorityClass = "High"; Write-Host "OK: Priority High" } catch { Write-Host "SKIP: Priority" }
 
           # 2. Power plan: High Performance
-          powercfg -setactive SCHEME_MIN
+          try { powercfg -setactive SCHEME_MIN; Write-Host "OK: Power Plan" } catch { Write-Host "SKIP: Power Plan" }
 
           # 3. Kill bloat services
-          @('DiagTrack','WSearch','SysMain','WbioSrvc','TrkWks','TabletInputService','WerSvc','DPS','MapsBroker','lfsvc','WpnService') | ForEach {
-            Set-Service $_ -StartupType Disabled -ErrorAction SilentlyContinue
-            Stop-Service $_ -Force -ErrorAction SilentlyContinue
+          @('DiagTrack','WSearch','SysMain','WbioSrvc','TrkWks','WerSvc','DPS','MapsBroker','lfsvc','WpnService') | ForEach {
+            try { Set-Service $_ -StartupType Disabled; Stop-Service $_ -Force } catch {}
           }
+          Write-Host "OK: Services disabled"
 
           # 4. Visual FX = None
-          Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name VisualFXSetting -Value 2 -Force
-          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name VisualFXSetting -Value 2 -Force
+          try {
+            Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name VisualFXSetting -Value 2 -Force
+            Write-Host "OK: Visual FX"
+          } catch { Write-Host "SKIP: Visual FX" }
 
-          # 5. Pagefile 8-16GB fixed
-          $cs = Get-CimInstance Win32_ComputerSystem
-          Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $false}
-          New-CimInstance -ClassName Win32_PageFileSetting -Property @{InitialSize = 8192; MaximumSize = 16384} -ErrorAction SilentlyContinue | Out-Null
+          # 5. Pagefile (skip if no permission)
+          try {
+            $cs = Get-CimInstance Win32_ComputerSystem
+            Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $false}
+            Write-Host "OK: Pagefile auto-managed disabled"
+          } catch { Write-Host "SKIP: Pagefile" }
 
           # 6. Expand C:
-          try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax } catch {}
+          try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax; Write-Host "OK: Disk expanded" } catch { Write-Host "SKIP: Disk expand" }
 
           # 7. TCP tuning
-          netsh int tcp set global autotuninglevel=normal initialrto=3000 maxsynretransmissions=3 -ErrorAction SilentlyContinue
-          netsh int tcp set supplemental template=Internet congestionprovider=ctcp -ErrorAction SilentlyContinue
+          try { netsh int tcp set global autotuninglevel=normal initialrto=3000 maxsynretransmissions=3; Write-Host "OK: TCP tuning" } catch { Write-Host "SKIP: TCP tuning" }
 
-          Write-Host "::notice::Max perf applied"
+          Write-Host "`n=== Disk Info ==="
+          Get-PSDrive C | Format-Table Used, Free, @{N='TotalGB';E={[math]::Round(($_.Used + $_.Free)/1GB,1)}} -AutoSize
+
+          Write-Host "`n=== System Info ==="
+          Write-Host "CPU:     $((Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors) cores"
+          Write-Host "RAM:     $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)) GB"
+          Write-Host "OS:      $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          Write-Host "Disk C:  $([math]::Round((Get-PSDrive C).Free/1GB,1)) GB free / $([math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free)/1GB,1)) GB total"
 
       - name: Install Tools (if cache miss)
         if: steps.cache.outputs.cache-hit != 'true'
@@ -145,3 +157,15 @@ jobs:
             Write-Host "[$(date -Format HH:mm:ss)] Up | Peers: $peers | IP: $env:TS_IP"
             Start-Sleep 300
           }
+
+      - name: Upload Session Data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-${{ github.run_id }}
+          path: |
+            C:\Projects\
+            C:\Users\runneradmin\Desktop\
+            C:\Users\runneradmin\Documents\
+            C:\Users\runneradmin\Downloads\
+          retention-days: 90
