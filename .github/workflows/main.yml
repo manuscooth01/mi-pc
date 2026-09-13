@@ -326,11 +326,26 @@ jobs:
               }
           }
 
-          $tlsCheck = Invoke-WebRequest -Uri "https://$($env:TAILSCALE_IP):47990" -Method Head -SkipCertificateCheck -ErrorAction SilentlyContinue
-          if ($tlsCheck) {
-              Write-Host "Sunshine web endpoint responded successfully on HTTPS."
-          } else {
-              Write-Warning "La interfaz web de Sunshine aún no respondió ante HTTPS en $env:TAILSCALE_IP:47990. Revisa certificados y servicio."
+          $webUrl = "https://$($env:TAILSCALE_IP):47990"
+          $httpOk = $false
+
+          for ($i = 1; $i -le 5; $i++) {
+              try {
+                  $curl = curl.exe -k -I --max-time 10 $webUrl 2>$null
+                  if ($LASTEXITCODE -eq 0 -and $curl) {
+                      $httpOk = $true
+                      Write-Host "Sunshine web endpoint responded successfully on HTTPS."
+                      break
+                  }
+              } catch {
+                  Write-Host "Intento $i/5 de verificación HTTPS fallido para $webUrl"
+              }
+
+              Start-Sleep -Seconds 2
+          }
+
+          if (-not $httpOk) {
+              Write-Warning "La interfaz web de Sunshine aún no respondió ante HTTPS en $webUrl. Esto puede ser por certificado autofirmado, servicio no listo o bloqueo en la red."
           }
 
       - name: Maintain Connection & Auto-Restart
