@@ -1,5 +1,5 @@
-# .github/workflows/main.yml - LÍMITE ABSOLUTO SOFTWARE
-name: RDP Max Performance
+# .github/workflows/main.yml - FAST START
+name: RDP
 
 on:
   workflow_dispatch:
@@ -15,188 +15,82 @@ jobs:
   rdp:
     runs-on: windows-latest
     timeout-minutes: 360
-    env:
-      CACHE_VERSION: "2025-01-15"
 
     steps:
-      - name: Cache Tools
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\ProgramData\chocolatey\bin
-            C:\ProgramData\chocolatey\lib
-            C:\tools
-          key: tools-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/tool-list.txt') }}
-          restore-keys: tools-${{ env.CACHE_VERSION }}-${{ runner.os }}-
-
-      - name: Max Performance Tweaks
+      - name: Setup RDP + Spanish + Perf + Tailscale
         shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+          TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
+          $start = Get-Date
+          Write-Host "=== INICIO: $start ==="
 
-          # 1. Prioridad alta
-          try { (Get-Process -Id $PID).PriorityClass = "High"; Write-Host "OK: Priority High" } catch { Write-Host "SKIP: Priority" }
-
-          # 2. Power plan: High Performance
-          try { powercfg -setactive SCHEME_MIN; Write-Host "OK: Power Plan" } catch { Write-Host "SKIP: Power Plan" }
-
-          # 3. Kill bloat services
-          @('DiagTrack','WSearch','SysMain','WbioSrvc','TrkWks','WerSvc','DPS','MapsBroker','lfsvc','WpnService') | ForEach {
-            try { Set-Service $_ -StartupType Disabled; Stop-Service $_ -Force } catch {}
-          }
-          Write-Host "OK: Services disabled"
-
-          # 4. Visual FX = None
-          try {
-            Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name VisualFXSetting -Value 2 -Force
-            Write-Host "OK: Visual FX"
-          } catch { Write-Host "SKIP: Visual FX" }
-
-          # 5. Pagefile (skip if no permission)
-          try {
-            $cs = Get-CimInstance Win32_ComputerSystem
-            Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $false}
-            Write-Host "OK: Pagefile auto-managed disabled"
-          } catch { Write-Host "SKIP: Pagefile" }
-
-          # 6. Expand C:
-          try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax; Write-Host "OK: Disk expanded" } catch { Write-Host "SKIP: Disk expand" }
-
-          # 7. TCP tuning
-          try { netsh int tcp set global autotuninglevel=normal initialrto=3000 maxsynretransmissions=3; Write-Host "OK: TCP tuning" } catch { Write-Host "SKIP: TCP tuning" }
-
-          Write-Host "`n=== Disk Info ==="
-          Get-PSDrive C | Format-Table Used, Free, @{N='TotalGB';E={[math]::Round(($_.Used + $_.Free)/1GB,1)}} -AutoSize
-
-          Write-Host "`n=== System Info ==="
-          Write-Host "CPU:     $((Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors) cores"
-          Write-Host "RAM:     $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)) GB"
-          Write-Host "OS:      $((Get-CimInstance Win32_OperatingSystem).Caption)"
-          Write-Host "Disk C:  $([math]::Round((Get-PSDrive C).Free/1GB,1)) GB free / $([math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free)/1GB,1)) GB total"
-
-      - name: Set Spanish Language
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-
-          # Instalar paquete de idioma español
-          Write-Host "Instalando idioma español..."
-          $lang = New-WinUserLanguageList -Language "es-ES" -Force
-          $lang[0].InputMethodTips.Clear()
-          $lang[0].InputMethodTips.Add('0c0a:0000040a')
-          Set-WinUserLanguageList -LanguageList $lang -Force
-
-          # Locale del sistema (fechas, números, moneda)
-          Write-Host "Configurando locale del sistema..."
-          Set-WinSystemLocale -SystemLocale "es-ES"
-
-          # Locale del usuario
-          Write-Host "Configurando locale del usuario..."
-          $regPath = "HKCU:\Control Panel\International"
-          Set-ItemProperty $regPath -Name "sShortDate" -Value "dd/MM/yyyy"
-          Set-ItemProperty $regPath -Name "sLongDate" -Value "dddd, d 'de' MMMM 'de' yyyy"
-          Set-ItemProperty $regPath -Name "sTimeFormat" -Value "HH:mm:ss"
-          Set-ItemProperty $regPath -Name "sCurrency" -Value "€"
-          Set-ItemProperty $regPath -Name "sShortTime" -Value "HH:mm"
-
-          # Teclado español
-          Write-Host "Configurando teclado español..."
-          Set-ItemProperty "HKCU:\Keyboard Layout\Preload" -Name "1" -Value "0000040a"
-
-          # Idioma de la interfaz (requiere restart)
-          Write-Host "Configurando UI en español..."
-          $langList = Get-WinUserLanguageList
-          $langList[0].Autonym = "español"
-          Set-WinUserLanguageList -LanguageList $langList -Force
-
-          Write-Host "OK: Español configurado (reiniciar para aplicar UI completo)"
-
-      - name: Install Tools (if cache miss)
-        if: steps.cache.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          # SOLO lo necesario - edita esta lista según tu uso
-          $tools = @(
-            '7zip','git','vscode','firefox'
-          )
-          choco upgrade chocolatey -y --no-progress --limit-output
-          choco install -y $tools --no-progress --limit-output
-
-      - name: Setup RDP (No NLA)
-        shell: powershell
-        run: |
+          # --- RDP ---
+          Write-Host "[1/5] Configurando RDP..."
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0 -Force
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0 -Force
-          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name SecurityLayer -Value 1 -Force
           netsh advfirewall firewall delete rule name="RDP" 2>$null
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service TermService -Force
 
-      - name: Create User
-        shell: powershell
-        env:
-          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
-        run: |
-          $p = $env:RDP_PASSWORD
-          if (-not $p) { Write-Error "RDP_PASSWORD missing"; exit 1 }
-          $sp = ConvertTo-SecureString $p -AsPlainText -Force
+          # --- USUARIO ---
+          Write-Host "[2/5] Creando usuario RDP..."
+          if (-not $env:RDP_PASSWORD) { Write-Error "RDP_PASSWORD missing"; exit 1 }
+          $sp = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
           if (Get-LocalUser RDP -ea 0) { Set-LocalUser RDP -Password $sp }
           else { New-LocalUser RDP -Password $sp -AccountNeverExpires; Add-LocalGroupMember Administrators RDP; Add-LocalGroupMember "Remote Desktop Users" RDP }
-          "RDP_USER=RDP" >> $env:GITHUB_ENV
 
-      - name: Tailscale (Exit Node)
-        shell: powershell
-        env:
-          TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
+          # --- ESPAÑOL ---
+          Write-Host "[3/5] Configurando español..."
+          Set-WinSystemLocale -SystemLocale "es-ES"
+          $lang = New-WinUserLanguageList -Language "es-ES" -Force
+          Set-WinUserLanguageList -LanguageList $lang -Force
+          Set-ItemProperty "HKCU:\Control Panel\International" -Name "sShortDate" -Value "dd/MM/yyyy" -Force
+          Set-ItemProperty "HKCU:\Control Panel\International" -Name "sTimeFormat" -Value "HH:mm:ss" -Force
+          Set-ItemProperty "HKCU:\Control Panel\International" -Name "sCurrency" -Value "€" -Force
+
+          # --- PERFORMANCE ---
+          Write-Host "[4/5] Optimizando rendimiento..."
+          try { (Get-Process -Id $PID).PriorityClass = "High" } catch {}
+          try { powercfg -setactive SCHEME_MIN } catch {}
+          @('DiagTrack','WSearch','SysMain','WerSvc','DPS','MapsBroker') | ForEach {
+            try { Set-Service $_ -StartupType Disabled; Stop-Service $_ -Force } catch {}
+          }
+          try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax } catch {}
+          Write-Host "CPU:     $((Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors) cores"
+          Write-Host "RAM:     $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)) GB"
+          Write-Host "Disk C:  $([math]::Round((Get-PSDrive C).Free/1GB,1)) GB free"
+
+          # --- TAILSCALE ---
+          Write-Host "[5/5] Instalando Tailscale..."
           $tsExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
           if (-not (Test-Path $tsExe)) {
             $msi = "$env:TEMP\ts.msi"
-            irm "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile $msi
+            Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile $msi
             Start-Process msiexec -Arg "/i `"$msi`" /qn /norestart" -Wait
-            Remove-Item $msi
+            Remove-Item $msi -Force
           }
           & $tsExe logout 2>$null
           Remove-Item "$env:ProgramData\Tailscale\tailscaled.state" -Force -ea 0
-          & $tsExe up --authkey=$env:TS_KEY --hostname="gha-$env:GITHUB_RUN_ID" --unattended --accept-routes --advertise-exit-node
-          
+          & $tsExe up --authkey=$env:TS_KEY --hostname="gha-$env:GITHUB_RUN_ID" --unattended --accept-routes
+
           $ip = $null; $i=0
-          while (-not $ip -and $i -lt 20) { $ip = (& $tsExe ip -4 | select -First 1)?.Trim(); if(-not $ip){sleep 3;$i++} }
+          while (-not $ip -and $i -lt 20) { $ip = (& $tsExe ip -4 | Select-Object -First 1)?.Trim(); if(-not $ip){Start-Sleep 3;$i++} }
           if (-not $ip) { Write-Error "No Tailscale IP"; exit 1 }
-          "TS_IP=$ip" >> $env:GITHUB_ENV
 
-      - name: Verify & Connect Info
-        shell: powershell
-        run: |
-          Write-Host "=== RDP READY ==="
-          Write-Host "IP:       $env:TS_IP"
-          Write-Host "User:     $env:RDP_USER"
-          Write-Host "Pass:     (secret RDP_PASSWORD)"
-          Write-Host "Port:     3389"
+          $elapsed = ((Get-Date) - $start).TotalSeconds
+          Write-Host "`n=== RDP LISTO EN $([math]::Round($elapsed,0))s ==="
+          Write-Host "IP:       $ip"
+          Write-Host "User:     RDP"
+          Write-Host "Pass:     (secreto RDP_PASSWORD)"
+          Write-Host "Puerto:   3389"
           Write-Host "==============="
-          if (-not (Test-NetConnection $env:TS_IP -Port 3389).TcpTestSucceeded) { Write-Error "Port 3389 blocked"; exit 1 }
 
-      - name: Keep Alive
-        shell: powershell
-        env:
-          HOURS: ${{ github.event.inputs.hours }}
-        run: |
-          $end = (Get-Date).AddHours([int]$env:HOURS)
+          # --- KEEP ALIVE ---
+          $end = (Get-Date).AddHours([int]$env:hours)
           while ((Get-Date) -lt $end) {
-            $peers = (& "$env:ProgramFiles\Tailscale\tailscale.exe" status --json | ConvertFrom-Json).Peer.Count
-            Write-Host "[$(date -Format HH:mm:ss)] Up | Peers: $peers | IP: $env:TS_IP"
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Up | IP: $ip"
             Start-Sleep 300
           }
-
-      - name: Upload Session Data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: session-${{ github.run_id }}
-          path: |
-            C:\Projects\
-            C:\Users\runneradmin\Desktop\
-            C:\Users\runneradmin\Documents\
-            C:\Users\runneradmin\Downloads\
-          retention-days: 90
