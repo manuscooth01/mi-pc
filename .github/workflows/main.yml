@@ -336,12 +336,27 @@ jobs:
               exit 1
           }
 
-          Stop-Service SunshineService -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
-          Start-Service SunshineService -ErrorAction Stop
-          Start-Sleep -Seconds 10
+          # Detener sin quedar bloqueado si Sunshine no responde al control SCM.
+          sc.exe stop SunshineService | Out-Host
+          $stopDeadline = (Get-Date).AddSeconds(30)
+          do {
+              Start-Sleep -Seconds 2
+              $service = Get-Service -Name SunshineService -ErrorAction Stop
+          } while ($service.Status -ne 'Stopped' -and (Get-Date) -lt $stopDeadline)
 
-          $service = Get-Service -Name SunshineService -ErrorAction Stop
+          if ($service.Status -ne 'Stopped') {
+              Write-Warning "SunshineService no se detuvo en 30 segundos; finalizando procesos Sunshine."
+              Get-Process -Name sunshine -ErrorAction SilentlyContinue | Stop-Process -Force
+              Start-Sleep -Seconds 2
+          }
+
+          sc.exe start SunshineService | Out-Host
+          $startDeadline = (Get-Date).AddSeconds(30)
+          do {
+              Start-Sleep -Seconds 2
+              $service = Get-Service -Name SunshineService -ErrorAction Stop
+          } while ($service.Status -ne 'Running' -and (Get-Date) -lt $startDeadline)
+
           if ($service.Status -ne 'Running') {
               Write-Error "SunshineService no quedó en estado Running. Estado actual: $($service.Status)"
               Get-Service SunshineService | Format-List *
