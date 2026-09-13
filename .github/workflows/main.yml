@@ -143,7 +143,7 @@ jobs:
 
           Write-Host "Connecting Tailscale as: $hostname using OAuth token"
           $env:TS_AUTHKEY = $tailscaleToken
-          & $tsExe up --hostname=$hostname --accept-routes --advertise-tags=tag:ci
+          & $tsExe up --hostname=$hostname --accept-routes
           if ($LASTEXITCODE -ne 0) {
               Write-Error "Tailscale no pudo conectarse con token OAuth"
               & $tsExe status
