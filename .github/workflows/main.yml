@@ -60,26 +60,47 @@ jobs:
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP	ailscale.msi"
-          
+          # Construir ruta de forma segura (evita problemas por caracteres inesperados)
+          $installerPath = Join-Path $env:TEMP 'tailscale.msi'
+
+          Write-Host "Descargando Tailscale a: $installerPath"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+
+          if (-not (Test-Path $installerPath)) {
+              Write-Error "Tailscale installer not found at $installerPath"
+              exit 1
+          }
+
+          # Instalar silenciosamente usando el operador de llamada para capturar $LASTEXITCODE
+          & msiexec.exe /i "$installerPath" /quiet /norestart
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "msiexec returned exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+          }
+
           Remove-Item $installerPath -Force
 
       - name: Establish Tailscale Connection
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          & "$env:ProgramFiles\Tailscale	ailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
-          # Wait for Tailscale to assign an IP
+          # Ruta al ejecutable de Tailscale
+          $tsExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+          if (-not (Test-Path $tsExe)) {
+              Write-Error "Tailscale executable not found at $tsExe"
+              exit 1
+          }
+
+          # Levantar Tailscale con la auth key (el secreto se expande en tiempo de ejecución por Actions)
+          & "$tsExe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=("gh-runner-$env:GITHUB_RUN_ID")
+
+          # Esperar a que asigne IP (trim para limpiar saltos de línea)
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale	ailscale.exe" ip -4
+              $tsIP = (& "$tsExe" ip -4).Trim()
               Start-Sleep -Seconds 5
               $retries++
           }
-          
+
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
