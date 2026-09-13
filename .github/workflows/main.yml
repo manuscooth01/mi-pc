@@ -58,7 +58,8 @@ jobs:
           try { Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax } catch {}
 
           # 7. TCP tuning
-          netsh int tcp set global autotuninglevel=normal congestionprovider=ctcp initialrto=3000 maxsynretransmissions=3 -ErrorAction SilentlyContinue
+          netsh int tcp set global autotuninglevel=normal initialrto=3000 maxsynretransmissions=3 -ErrorAction SilentlyContinue
+          netsh int tcp set supplemental template=Internet congestionprovider=ctcp -ErrorAction SilentlyContinue
 
           Write-Host "::notice::Max perf applied"
 
