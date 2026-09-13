@@ -188,7 +188,8 @@ jobs:
         run: |
           # Instala el driver que permite a Sunshine capturar una pantalla sin monitor físico.
           $vddZip = Join-Path $env:TEMP "vdd.zip"
-          Invoke-WebRequest -Uri "https://github.com/qianwei-github/Virtual-Display-Driver/releases/download/v23.10.19/VirtualDisplayDriver.zip" -OutFile $vddZip
+          $vddUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest/download/VirtualDisplayDriver-x86.Driver.Only.zip"
+          Invoke-WebRequest -Uri $vddUrl -OutFile $vddZip
           Expand-Archive $vddZip -DestinationPath "$env:TEMP\vdd" -Force
 
           $installer = Get-ChildItem "$env:TEMP\vdd" -Recurse -Filter "*.bat" | Where-Object { $_.Name -like "*install*" } | Select-Object -First 1
