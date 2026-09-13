@@ -31,39 +31,35 @@ jobs:
           # Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password
+      - name: Create RDP User with Fixed Password
         shell: powershell
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)                                  # A-Z
-              Lower   = [char[]](97..122)                                 # a-z
-              Number  = [char[]](48..57)                                  # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))           # Special characters
+          $password   = "${{ secrets.RDP_PASSWORD }}"
+          if ([string]::IsNullOrWhiteSpace($password)) {
+              Write-Error "El secreto RDP_PASSWORD no está definido en el repositorio."
+              exit 1
           }
-          $rawPassword  = @()
-          $rawPassword += $charSet.Upper   | Get-Random -Count 4
-          $rawPassword += $charSet.Lower   | Get-Random -Count 4
-          $rawPassword += $charSet.Number  | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-
-          # Shuffle to avoid predictable order
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
 
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators"       -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
 
+          # Crear el usuario si no existe, o actualizar la contraseña si ya existe
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              Set-LocalUser -Name "RDP" -Password $securePass
+              Write-Host "Usuario RDP ya existía, contraseña actualizada."
+          } else {
+              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+              Add-LocalGroupMember -Group "Administrators"       -Member "RDP"
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+              Write-Host "Usuario RDP creado correctamente."
+          }
+
+          # Verificación
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
           }
 
-          # Store credentials in GITHUB_ENV (avoid newlines in value)
-          "RDP_USER=RDP"            >> $env:GITHUB_ENV
-          "RDP_PASSWORD=$password"  >> $env:GITHUB_ENV
+          "RDP_USER=RDP" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         shell: powershell
@@ -99,8 +95,12 @@ jobs:
               exit 1
           }
 
-          # Bring Tailscale up with the auth key and a dynamic hostname
-          & "$tsExe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID"
+          # Forzar una identidad nueva (evita conflictos si el runner reutiliza estado)
+          & "$tsExe" logout 2>$null
+          Remove-Item "$env:ProgramData\Tailscale\tailscaled.state" -Force -ErrorAction SilentlyContinue
+
+          # Bring Tailscale up (unattended = sin interfaz gráfica)
+          & "$tsExe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID" --unattended
 
           # Wait for the Tailscale IPv4 to be assigned
           $tsIP = $null
@@ -137,7 +137,7 @@ jobs:
           Write-Host "=== RDP ACCESS ==="
           Write-Host "Address:  $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "Password: (la definida en el secreto RDP_PASSWORD)"
           Write-Host "=================="
           Write-Host ""
 
