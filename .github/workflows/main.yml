@@ -69,17 +69,17 @@ jobs:
       - name: Validate Required Secrets and Runtime
         shell: powershell
         run: |
-          $requiredSecrets = @(
-              'RDP_PASSWORD',
-              'TAILSCALE_AUTH_KEY'
-          )
+          $rdpPassword = "${{ secrets.RDP_PASSWORD }}"
+          $tailscaleAuthKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
 
-          foreach ($secretName in $requiredSecrets) {
-              $value = [Environment]::GetEnvironmentVariable($secretName, 'Process')
-              if (-not $value -or [string]::IsNullOrWhiteSpace($value)) {
-                  Write-Error "Falta el secreto requerido: $secretName"
-                  exit 1
-              }
+          if ([string]::IsNullOrWhiteSpace($rdpPassword)) {
+              Write-Error "Falta el secreto requerido: RDP_PASSWORD"
+              exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tailscaleAuthKey)) {
+              Write-Error "Falta el secreto requerido: TAILSCALE_AUTH_KEY"
+              exit 1
           }
 
           if (-not $env:GITHUB_RUN_ID) {
