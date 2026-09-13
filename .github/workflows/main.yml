@@ -14,7 +14,7 @@ on:
 jobs:
   rdp:
     runs-on: windows-latest
-    timeout-minutes: ${{ github.event.inputs.hours * 60 }}
+    timeout-minutes: 360
     env:
       CACHE_VERSION: "2025-01-15"
 
