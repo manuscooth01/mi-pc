@@ -216,6 +216,75 @@ jobs:
               Write-Host "WARNING: VB-Cable setup not found. Audio may not work."
           }
 
+      - name: Install Virtual Display Driver (NefCon method)
+        run: |
+          # Metodo oficial de la comunidad VDD: NefCon instala el .inf Y crea el
+          # dispositivo root\MttVDD (pnputil solo solo deja el driver en el store).
+          # Basado en: Community Scripts/silent-install.ps1 del repo VirtualDrivers.
+          $tempDir = Join-Path $env:TEMP "VDDInstall"
+          New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+          # 1) NefCon (device console de Nefarius)
+          $nefConUrl = "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip"
+          $nefConZip = Join-Path $tempDir "nefcon.zip"
+          Write-Host "Downloading NefCon..."
+          Invoke-WebRequest -Uri $nefConUrl -OutFile $nefConZip -UseBasicParsing -ErrorAction Stop
+          Expand-Archive -Path $nefConZip -DestinationPath $tempDir -Force -ErrorAction Stop
+          $nefConExe = Join-Path $tempDir "x64\nefconw.exe"
+          if (-not (Test-Path $nefConExe)) {
+              Write-Error "nefconw.exe no encontrado tras extraer el zip."
+              exit 1
+          }
+
+          # 2) Driver solo (zip del release actual)
+          $driverUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest/download/VirtualDisplayDriver-x86.Driver.Only.zip"
+          $driverZip = Join-Path $tempDir "driver.zip"
+          Write-Host "Downloading Virtual Display Driver..."
+          Invoke-WebRequest -Uri $driverUrl -OutFile $driverZip -UseBasicParsing -ErrorAction Stop
+          Expand-Archive -Path $driverZip -DestinationPath $tempDir -Force -ErrorAction Stop
+
+          $infPath = Join-Path $tempDir "VirtualDisplayDriver\MttVDD.inf"
+          if (-not (Test-Path $infPath)) {
+              Write-Error "MttVDD.inf no encontrado en el paquete del driver."
+              Get-ChildItem $tempDir -Recurse | Select-Object FullName
+              exit 1
+          }
+
+          # 3) Importar los certificados del .cat a TrustedPublisher (evita bloqueo de driver firmado)
+          $catFile = Join-Path $tempDir "VirtualDisplayDriver\mttvdd.cat"
+          if (Test-Path $catFile) {
+              Write-Host "Installing driver certificates to TrustedPublisher..."
+              $certificates = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+              $certificates.Import([System.IO.File]::ReadAllBytes($catFile))
+              foreach ($cert in $certificates) {
+                  $certFile = Join-Path $tempDir "$($cert.Thumbprint).cer"
+                  $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert) | Set-Content -Path $certFile -Encoding Byte
+                  Import-Certificate -FilePath $certFile -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+              }
+          }
+
+          # 4) Instalar driver + crear dispositivo root\MttVDD
+          Write-Host "Installing Virtual Display Driver (Root\MttVDD) via NefCon..."
+          Push-Location $tempDir
+          & $nefConExe install ".\VirtualDisplayDriver\MttVDD.inf" "Root\MttVDD"
+          $nefExit = $LASTEXITCODE
+          Pop-Location
+          Write-Host "NefCon exit code: $nefExit"
+          Start-Sleep -Seconds 10
+
+          # 5) Verificar que el dispositivo existe y esta presente
+          $vdd = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match "Virtual Display" }
+          if ($vdd) {
+              $vdd | Format-Table -AutoSize
+              Write-Host "Virtual Display Driver installed and device present."
+          } else {
+              Write-Warning "No se detecto el dispositivo 'Virtual Display Driver'. Sunshine capturara pantalla negra."
+              Write-Host "PnP devices con 'MttVDD' en el InstanceId:"
+              Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match "MttVDD" } | Format-Table -AutoSize
+          }
+
+          Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+
       - name: Install Sunshine (Latest Version)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -338,46 +407,6 @@ jobs:
 
           Write-Host "Sunshine service started and verified on port 47990."
 
-      - name: Install Virtual Display Driver (IDD)
-        run: |
-          # CORREGIDO: el release 25.7.23+ ya no incluye .bat; busca .bat/.cmd/.ps1 y usa fallback pnputil.
-          $vddZip = Join-Path $env:TEMP "vdd.zip"
-          $vddUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest/download/VirtualDisplayDriver-x86.Driver.Only.zip"
-          Invoke-WebRequest -Uri $vddUrl -OutFile $vddZip -UseBasicParsing
-          Expand-Archive $vddZip -DestinationPath "$env:TEMP\vdd" -Force
-
-          Write-Host "Contents of driver package:"
-          Get-ChildItem "$env:TEMP\vdd" -Recurse | Select-Object FullName | Format-Table -AutoSize
-
-          $installer = Get-ChildItem "$env:TEMP\vdd" -Recurse -Include "*.bat","*.cmd","*.ps1" -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match 'install' } | Select-Object -First 1
-
-          $installed = $false
-          if ($installer) {
-              Write-Host "Running installer: $($installer.FullName)"
-              if ($installer.Extension -eq ".ps1") {
-                  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer.FullName
-              } else {
-                  & cmd.exe /c "`"$($installer.FullName)`""
-              }
-              if ($LASTEXITCODE -eq 0) { $installed = $true }
-          }
-
-          if (-not $installed) {
-              Write-Host "No install script found or it failed; falling back to pnputil..."
-              $inf = Get-ChildItem "$env:TEMP\vdd" -Recurse -Filter "*.inf" | Select-Object -First 1
-              if ($inf) {
-                  pnputil /add-driver "$($inf.FullName)" /install
-                  if ($LASTEXITCODE -eq 0) { $installed = $true }
-              }
-          }
-
-          if ($installed) {
-              Write-Host "Virtual Display Driver installed."
-          } else {
-              Write-Warning "Virtual Display Driver install FAILED. Sunshine capture will be black."
-          }
-
       - name: Create Console-Switch Script
         run: |
           $bat = @'
@@ -408,8 +437,6 @@ jobs:
               }
           }
 
-          # CORREGIDO: Invoke-WebRequest con -SkipCertificateCheck (PS7) tolera el cert autofirmado
-          # y da mas tiempo a Sunshine para generar el certificado al primer arranque.
           $webUrl = "https://$($env:TAILSCALE_IP):47990"
           $httpOk = $false
           for ($i = 1; $i -le 15; $i++) {
@@ -425,7 +452,7 @@ jobs:
           }
 
           if (-not $httpOk) {
-              Write-Warning "La web de Sunshine no respondio a HTTPS. El servicio SI escucha en 47990; esto suele ser el certificado autofirmado. Prueba abrir la URL directamente en el navegador."
+              Write-Warning "La web de Sunshine no respondio a HTTPS. El servicio SI escucha en 47990; suele ser el certificado autofirmado. Prueba abrir la URL directamente en el navegador."
           }
           exit 0
 
@@ -445,7 +472,6 @@ jobs:
           Write-Host "========================================="
           Write-Host ""
 
-          # 320 min: margen seguro bajo el limite duro de 360 min de los runners GitHub-hosted.
           if (-not $env:GH_TOKEN) {
               Write-Warning "WORKFLOW_PAT no configurado: la sesion terminara sin auto-reinicio. Crea el secreto WORKFLOW_PAT (PAT con permiso actions:write) para sesiones renovables."
           }
