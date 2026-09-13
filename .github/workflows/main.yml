@@ -236,25 +236,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $headers = @{ Authorization = "token $env:GH_TOKEN" }
+          $headers = @{}
+          if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+              $headers.Authorization = "Bearer $env:GH_TOKEN"
+          }
           $installerUrl = $null
 
           try {
               Write-Host "Fetching latest Sunshine release from GitHub API..."
               $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest" -Headers $headers -ErrorAction Stop
-              $installerUrl = ($releaseInfo.assets | Where-Object { $_.name -like "*WindowsInstaller.exe" }).browser_download_url
+              $installerAsset = $releaseInfo.assets |
+                  Where-Object { $_.name -eq "Sunshine-Windows-AMD64-installer.msi" } |
+                  Select-Object -First 1
+              $installerUrl = $installerAsset.browser_download_url
 
               if (-not $installerUrl) {
-                  Write-Host "No WindowsInstaller.exe found in the latest release. Assets available:"
+                  Write-Host "No AMD64 MSI found in the latest release. Assets available:"
                   $releaseInfo.assets | ForEach-Object { Write-Host " - $($_.name)" }
               }
           } catch {
               Write-Host "API request failed or rate limited. Using fallback URL."
           }
 
-          # Si la API falló, usamos una URL de respaldo
+          # El endpoint latest/download sigue la versión estable actual sin fijar un tag antiguo.
           if (-not $installerUrl) {
-              $installerUrl = "https://github.com/LizardByte/Sunshine/releases/download/v0.23.1/sunshine-windows-installer.exe"
+              $installerUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi"
               Write-Host "Using fallback URL: $installerUrl"
           }
 
@@ -263,7 +269,7 @@ jobs:
               exit 1
           }
 
-          $installer = Join-Path $env:TEMP "sunshine-installer.exe"
+          $installer = Join-Path $env:TEMP "sunshine-installer.msi"
           Write-Host "Downloading Sunshine from: $installerUrl"
           try {
               Invoke-WebRequest -Uri $installerUrl -OutFile $installer -UseBasicParsing
@@ -277,7 +283,7 @@ jobs:
               exit 1
           }
 
-          Start-Process $installer -ArgumentList "/S" -Wait
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
 
           $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
           if (-not (Test-Path $sunshineExe)) {
