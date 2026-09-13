@@ -1,10 +1,8 @@
 #!/bin/bash
-# setup-gui.sh - Versión ligera y compatible con recovery mode
+# setup-gui.sh - GUI ligera + VNC + noVNC + Tailscale con LOGIN LINK + Sunshine Moonlight
 set -e
 
 echo "=== Instalando GUI ligera (XFCE + VNC + noVNC) ==="
-
-# No fallar si apt tiene warnings
 sudo apt-get update || true
 sudo apt-get install -y --no-install-recommends \
   xfce4 xfce4-terminal thunar dbus-x11 \
@@ -15,7 +13,6 @@ sudo apt-get install -y tightvncserver novnc websockify || true
 
 echo "=== Configurando VNC ==="
 mkdir -p ~/.vnc
-# Password 12345678
 echo "12345678" | vncpasswd -f > ~/.vnc/passwd || true
 chmod 600 ~/.vnc/passwd || true
 
@@ -38,7 +35,6 @@ localhost=no
 EOF
 
 sudo chown -R vscode:vscode ~/.vnc 2>/dev/null || true
-sudo chown -R $USER:$USER ~/.vnc 2>/dev/null || true
 
 echo "=== Creando scripts de inicio ==="
 
@@ -56,14 +52,12 @@ echo ""
 echo "=========================================="
 echo "  GUI INICIADA"
 echo "=========================================="
-echo "noVNC Web (navegador celular):"
-echo "  Puerto 6080 -> Abre en pestaña PUERTOS > 6080 > Abrir en navegador"
-echo "  Password: 12345678"
+echo "noVNC Web (navegador celular, sin Tailscale):"
+echo "  Puerto 6080 -> Puertos > 6080 > Abrir"
+echo "  Pass: 12345678"
 echo ""
-echo "VNC directo (RVNC Viewer):"
-echo "  Si tienes Tailscale:"
-tailscale ip -4 2>/dev/null && echo "  Conecta a: \$(tailscale ip -4):5901" || echo "  Ejecuta: ~/start-tailscale.sh TU_KEY"
-echo "  Sin Tailscale: usa noVNC web"
+echo "VNC directo / Moonlight (con Tailscale):"
+tailscale ip -4 2>/dev/null && echo "  IP: $(tailscale ip -4) -> RVNC Viewer $(tailscale ip -4):5901" || echo "  Ejecuta: ~/start-tailscale.sh  (te dara link de login)"
 echo "=========================================="
 EOS
 
@@ -77,52 +71,95 @@ EOS
 cat > ~/start-novnc.sh << 'EOS'
 #!/bin/bash
 pkill -f websockify 2>/dev/null; true
-websockify --web=/usr/share/novnc -D 6080 localhost:5901
-echo "noVNC en 6080"
+websockify --web=/usr/share/novnc -D 6080 localhost:5901 --daemon
+echo "noVNC en 6080 - Abre en Puertos > 6080"
 EOS
 
 cat > ~/start-tailscale.sh << 'EOS'
 #!/bin/bash
-if [ -z "$1" ] && [ -z "$TAILSCALE_AUTH_KEY" ]; then
-  echo "Uso: ~/start-tailscale.sh tskey-auth-xxx"
-  echo "o export TAILSCALE_AUTH_KEY=tskey-..."
-  exit 1
-fi
-KEY=${1:-$TAILSCALE_AUTH_KEY}
+# Soporta 2 modos:
+# 1. Con API key: ~/start-tailscale.sh tskey-auth-xxx
+# 2. Con link de login (sin key): ~/start-tailscale.sh  -> te da URL https://login.tailscale.com/a/xxxx
+
 # Iniciar daemon si no corre (sin systemd)
 if ! pgrep -x tailscaled > /dev/null; then
-  echo "Iniciando tailscaled sin systemd..."
+  echo "Iniciando tailscaled..."
+  sudo rm -rf /tmp/tailscaled.sock /tmp/tailscaled.state 2>/dev/null; true
   sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock > /tmp/tailscaled.log 2>&1 &
   sleep 3
 fi
-sudo tailscale --socket=/tmp/tailscaled.sock up --authkey=$KEY --hostname=codespace-gui-${CODESPACE_NAME:-gui} || sudo tailscale up --authkey=$KEY --hostname=codespace-gui || true
-echo "IP Tailscale:"
-tailscale --socket=/tmp/tailscaled.sock ip -4 2>/dev/null || tailscale ip -4 2>/dev/null || echo "Aun no hay IP, espera 5s y repite tailscale ip -4"
+
+if [ -n "$1" ]; then
+  KEY=$1
+  echo "Conectando con API Key..."
+  sudo tailscale --socket=/tmp/tailscaled.sock up --authkey=$KEY --hostname=codespace-gui-${CODESPACE_NAME:-gui} 2>&1 || sudo tailscale up --authkey=$KEY --hostname=codespace-gui 2>&1
+elif [ -n "$TAILSCALE_AUTH_KEY" ]; then
+  echo "Conectando con TAILSCALE_AUTH_KEY de env..."
+  sudo tailscale --socket=/tmp/tailscaled.sock up --authkey=$TAILSCALE_AUTH_KEY --hostname=codespace-gui-${CODESPACE_NAME:-gui} 2>&1 || sudo tailscale up --authkey=$TAILSCALE_AUTH_KEY --hostname=codespace-gui 2>&1
+else
+  echo ""
+  echo "=== TAILSCALE LOGIN CON LINK (sin API key) ==="
+  echo "Se abrirá un link de autenticación. Ábrelo en tu celular/navegador y loguéate."
+  echo ""
+  # Intentar login interactivo que da link
+  sudo tailscale --socket=/tmp/tailscaled.sock up --hostname=codespace-gui-${CODESPACE_NAME:-gui} 2>&1 || sudo tailscale up --hostname=codespace-gui 2>&1 || true
+  echo ""
+  echo "Si arriba viste un link tipo https://login.tailscale.com/a/xxxxxxxx"
+  echo "Ábrelo en tu celular/navegador y autoriza."
+  echo ""
+  echo "Después de autorizar, ejecuta: tailscale ip -4"
+fi
+
+echo ""
+echo "Esperando IP..."
+sleep 2
+tailscale --socket=/tmp/tailscaled.sock ip -4 2>/dev/null || tailscale ip -4 2>/dev/null || echo "Aún sin IP. Si usaste link, autoriza el link de arriba y luego ejecuta: tailscale ip -4"
+echo ""
+EOS
+
+cat > ~/start-tailscale-login.sh << 'EOS'
+#!/bin/bash
+# Solo link, sin key - el más fácil
+echo "=== TAILSCALE LOGIN CON LINK ==="
+if ! pgrep -x tailscaled > /dev/null; then
+  sudo rm -rf /tmp/tailscaled.sock /tmp/tailscaled.state 2>/dev/null; true
+  sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock > /tmp/tailscaled.log 2>&1 &
+  sleep 3
+fi
+echo "Abre este link en tu navegador/celular para autenticar:"
+echo ""
+sudo tailscale --socket=/tmp/tailscaled.sock up --hostname=codespace-gui 2>&1 | tee /tmp/ts-login.txt
+cat /tmp/ts-login.txt
+echo ""
+echo "Después de abrir el link y loguearte:"
+echo "  tailscale ip -4"
+echo "Esa IP la usas en RVNC Viewer y Moonlight"
 EOS
 
 cat > ~/start-sunshine.sh << 'EOS'
 #!/bin/bash
-echo "=== Sunshine para Moonlight (experimental sin GPU) ==="
+echo "=== Sunshine para Moonlight ==="
 if ! command -v sunshine &> /dev/null; then
-  echo "Sunshine no instalado, instalando..."
+  echo "Instalando Sunshine..."
   SUNSHINE_URL=$(curl -s https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep "browser_download_url.*ubuntu-22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
   if [ -n "$SUNSHINE_URL" ]; then
     wget -q -O /tmp/sunshine.deb "$SUNSHINE_URL" && sudo apt-get install -y /tmp/sunshine.deb || sudo dpkg -i /tmp/sunshine.deb || true
   else
-    echo "No se pudo descargar Sunshine. Usa VNC por ahora."
+    echo "No se pudo descargar Sunshine. Usa VNC."
     exit 1
   fi
 fi
 export DISPLAY=:1
 vncserver :1 -geometry 1280x720 -depth 24 -localhost no 2>/dev/null || true
-echo "Abre Sunshine Web: http://localhost:47990 o puerto 47990 en PORTS"
-echo "En Moonlight celular: Add Host -> IP Tailscale"
+echo "Sunshine Web: Puertos > 47990 > Abrir"
+echo "Moonlight celular: Add Host -> IP Tailscale (sin puerto)"
+echo "Te pedirá PIN, ponlo en Sunshine Web > PIN"
 sunshine
 EOS
 
 chmod +x ~/start-*.sh
 
-echo "=== Instalando Tailscale (sin systemd) ==="
+echo "=== Instalando Tailscale ==="
 if ! command -v tailscale &> /dev/null; then
   curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null || true
   curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null || true
@@ -132,9 +169,15 @@ fi
 
 echo ""
 echo "=========================================="
-echo "  INSTALADO OK"
+echo "  INSTALADO OK - LOGIN CON LINK"
 echo "=========================================="
-echo "Ejecuta: ~/start-gui.sh"
-echo "Luego ve a pestaña PUERTOS > 6080 > Abrir"
-echo "Pass VNC: 12345678"
+echo "Para GUI: ~/start-gui.sh"
+echo "Para Tailscale SIN API KEY (con link):"
+echo "  ~/start-tailscale-login.sh"
+echo "  Te dará un link https://login.tailscale.com/a/xxxx"
+echo "  Ábrelo en tu celular y autoriza"
+echo "  Luego: tailscale ip -4"
+echo ""
+echo "Con API key (si la tienes):"
+echo "  ~/start-tailscale.sh tskey-xxx"
 echo "=========================================="
