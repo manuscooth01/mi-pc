@@ -86,20 +86,26 @@ jobs:
         shell: powershell
         run: |
           $rdpPassword = "${{ secrets.RDP_PASSWORD }}"
-                    $tailscaleToken = "${{ secrets.TAILSCALE_AUTH_TOKEN }}"
+                    $tailscaleApiKey = "${{ secrets.TAILSCALE_API_KEY }}"
+                    $tailscaleTailnet = "${{ secrets.TAILSCALE_TAILNET }}"
 
           if ([string]::IsNullOrWhiteSpace($rdpPassword)) {
               Write-Error "Falta el secreto requerido: RDP_PASSWORD"
               exit 1
           }
 
-          if ([string]::IsNullOrWhiteSpace($tailscaleToken)) {
-              Write-Error "Falta el secreto requerido: TAILSCALE_AUTH_TOKEN"
+          if ([string]::IsNullOrWhiteSpace($tailscaleApiKey)) {
+              Write-Error "Falta el secreto requerido: TAILSCALE_API_KEY"
               exit 1
           }
 
-          if ($tailscaleToken -notmatch '^tskey-(auth|client)-') {
-              Write-Error "TAILSCALE_AUTH_TOKEN no tiene formato de token Tailscale. Debe comenzar por tskey-auth- o tskey-client-."
+          if ($tailscaleApiKey -notmatch '^tskey-api-') {
+              Write-Error "TAILSCALE_API_KEY debe comenzar por tskey-api-."
+              exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tailscaleTailnet)) {
+              Write-Error "Falta el secreto requerido: TAILSCALE_TAILNET"
               exit 1
           }
 
@@ -139,20 +145,51 @@ jobs:
         run: |
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
-          $tailscaleToken = "${{ secrets.TAILSCALE_AUTH_TOKEN }}"
+          $tailscaleApiKey = "${{ secrets.TAILSCALE_API_KEY }}"
+          $tailscaleTailnet = "${{ secrets.TAILSCALE_TAILNET }}"
 
-          if ([string]::IsNullOrWhiteSpace($tailscaleToken)) {
-              Write-Error "TAILSCALE_AUTH_TOKEN está vacío. No se puede conectar a Tailscale."
+          if ([string]::IsNullOrWhiteSpace($tailscaleApiKey) -or [string]::IsNullOrWhiteSpace($tailscaleTailnet)) {
+              Write-Error "Faltan TAILSCALE_API_KEY o TAILSCALE_TAILNET."
               exit 1
           }
 
-          if ($tailscaleToken -notmatch '^tskey-auth-') {
-              Write-Error "TAILSCALE_AUTH_TOKEN debe ser un auth token con formato tskey-auth-. Un OAuth client secret no sirve directamente para tailscale up."
+          $basicToken = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$tailscaleApiKey`:"))
+          $headers = @{ Authorization = "Basic $basicToken" }
+          $authKeyRequest = @{
+              capabilities = @{
+                  devices = @{
+                      create = @{
+                          reusable = $false
+                          ephemeral = $true
+                          preauthorized = $true
+                          tags = @()
+                      }
+                  }
+              }
+              expirySeconds = 3600
+          } | ConvertTo-Json -Depth 10
+
+          try {
+              $authKeyResponse = Invoke-RestMethod `
+                  -Uri "https://api.tailscale.com/api/v2/tailnet/$tailscaleTailnet/keys" `
+                  -Method Post `
+                  -Headers $headers `
+                  -ContentType "application/json" `
+                  -Body $authKeyRequest `
+                  -ErrorAction Stop
+              $tailscaleAuthKey = $authKeyResponse.key
+          } catch {
+              Write-Error "No se pudo crear una auth key temporal con TAILSCALE_API_KEY: $($_.Exception.Message)"
               exit 1
           }
 
-          Write-Host "Connecting Tailscale as: $hostname using auth token"
-          & $tsExe up --authkey="$tailscaleToken" --hostname=$hostname --accept-routes
+          if ([string]::IsNullOrWhiteSpace($tailscaleAuthKey) -or $tailscaleAuthKey -notmatch '^tskey-auth-') {
+              Write-Error "La API no devolvió una auth key válida."
+              exit 1
+          }
+
+          Write-Host "Connecting Tailscale as: $hostname using temporary auth token"
+          & $tsExe up --authkey="$tailscaleAuthKey" --hostname=$hostname --accept-routes
           if ($LASTEXITCODE -ne 0) {
               Write-Error "Tailscale no pudo conectarse con token OAuth"
               & $tsExe status
