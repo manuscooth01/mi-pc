@@ -75,6 +75,43 @@ jobs:
           Write-Host "OS:      $((Get-CimInstance Win32_OperatingSystem).Caption)"
           Write-Host "Disk C:  $([math]::Round((Get-PSDrive C).Free/1GB,1)) GB free / $([math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free)/1GB,1)) GB total"
 
+      - name: Set Spanish Language
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+
+          # Instalar paquete de idioma español
+          Write-Host "Instalando idioma español..."
+          $lang = New-WinUserLanguageList -Language "es-ES" -Force
+          $lang[0].InputMethodTips.Clear()
+          $lang[0].InputMethodTips.Add('0c0a:0000040a')
+          Set-WinUserLanguageList -LanguageList $lang -Force
+
+          # Locale del sistema (fechas, números, moneda)
+          Write-Host "Configurando locale del sistema..."
+          Set-WinSystemLocale -SystemLocale "es-ES"
+
+          # Locale del usuario
+          Write-Host "Configurando locale del usuario..."
+          $regPath = "HKCU:\Control Panel\International"
+          Set-ItemProperty $regPath -Name "sShortDate" -Value "dd/MM/yyyy"
+          Set-ItemProperty $regPath -Name "sLongDate" -Value "dddd, d 'de' MMMM 'de' yyyy"
+          Set-ItemProperty $regPath -Name "sTimeFormat" -Value "HH:mm:ss"
+          Set-ItemProperty $regPath -Name "sCurrency" -Value "€"
+          Set-ItemProperty $regPath -Name "sShortTime" -Value "HH:mm"
+
+          # Teclado español
+          Write-Host "Configurando teclado español..."
+          Set-ItemProperty "HKCU:\Keyboard Layout\Preload" -Name "1" -Value "0000040a"
+
+          # Idioma de la interfaz (requiere restart)
+          Write-Host "Configurando UI en español..."
+          $langList = Get-WinUserLanguageList
+          $langList[0].Autonym = "español"
+          Set-WinUserLanguageList -LanguageList $langList -Force
+
+          Write-Host "OK: Español configurado (reiniciar para aplicar UI completo)"
+
       - name: Install Tools (if cache miss)
         if: steps.cache.outputs.cache-hit != 'true'
         shell: powershell
