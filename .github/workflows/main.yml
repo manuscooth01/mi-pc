@@ -70,15 +70,15 @@ jobs:
         shell: powershell
         run: |
           $rdpPassword = "${{ secrets.RDP_PASSWORD }}"
-          $tailscaleAuthKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          $tailscaleToken = "${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}"
 
           if ([string]::IsNullOrWhiteSpace($rdpPassword)) {
               Write-Error "Falta el secreto requerido: RDP_PASSWORD"
               exit 1
           }
 
-          if ([string]::IsNullOrWhiteSpace($tailscaleAuthKey)) {
-              Write-Error "Falta el secreto requerido: TAILSCALE_AUTH_KEY"
+          if ([string]::IsNullOrWhiteSpace($tailscaleToken)) {
+              Write-Error "Falta el secreto requerido: TAILSCALE_OAUTH_CLIENT_SECRET"
               exit 1
           }
 
@@ -118,17 +118,18 @@ jobs:
         run: |
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
-          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          $tailscaleToken = "${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}"
 
-          if ([string]::IsNullOrWhiteSpace($authKey)) {
-              Write-Error "TAILSCALE_AUTH_KEY está vacío. No se puede conectar a Tailscale."
+          if ([string]::IsNullOrWhiteSpace($tailscaleToken)) {
+              Write-Error "TAILSCALE_OAUTH_CLIENT_SECRET está vacío. No se puede conectar a Tailscale."
               exit 1
           }
 
-          Write-Host "Connecting Tailscale as: $hostname"
-          & $tsExe up --authkey=$authKey --hostname=$hostname --accept-routes
+          Write-Host "Connecting Tailscale as: $hostname using OAuth token"
+          $env:TS_AUTHKEY = $tailscaleToken
+          & $tsExe up --hostname=$hostname --accept-routes --advertise-tags=tag:ci
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "Tailscale no pudo conectarse"
+              Write-Error "Tailscale no pudo conectarse con token OAuth"
               & $tsExe status
               exit $LASTEXITCODE
           }
