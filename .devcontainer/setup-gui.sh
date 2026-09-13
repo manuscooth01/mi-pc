@@ -138,10 +138,14 @@ EOS
 
 cat > ~/start-sunshine.sh << 'EOS'
 #!/bin/bash
+set -Eeuo pipefail
+
 echo "=== Sunshine para Moonlight ==="
+
+# Verifica que la herramienta exista antes de seguir.
 if ! command -v sunshine &> /dev/null; then
   echo "Instalando Sunshine..."
-  SUNSHINE_URL=$(curl -s https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep "browser_download_url.*ubuntu-22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
+  SUNSHINE_URL=$(curl -fsSL https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep "browser_download_url.*ubuntu-22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
   if [ -n "$SUNSHINE_URL" ]; then
     wget -q -O /tmp/sunshine.deb "$SUNSHINE_URL" && sudo apt-get install -y /tmp/sunshine.deb || sudo dpkg -i /tmp/sunshine.deb || true
   else
@@ -149,12 +153,61 @@ if ! command -v sunshine &> /dev/null; then
     exit 1
   fi
 fi
+
+# Seguridad básica del entorno.
 export DISPLAY=:1
-vncserver :1 -geometry 1280x720 -depth 24 -localhost no 2>/dev/null || true
+if [[ -z "${DISPLAY:-}" ]]; then
+  echo "ERROR: DISPLAY no está definido."
+  exit 1
+fi
+
+# Asegura que el escritorio remoto esté disponible antes de abrir Sunshine.
+if ! pgrep -x Xvnc >/dev/null 2>&1 && ! pgrep -x Xtigervnc >/dev/null 2>&1 && ! pgrep -x vncserver >/dev/null 2>&1; then
+  echo "No se detecta VNC activo; iniciando VNC en :1..."
+  vncserver :1 -geometry 1280x720 -depth 24 -localhost no 2>/dev/null || true
+fi
+
+# Espera a que VNC escuche en 5901 antes de arrancar la UI.
+for i in $(seq 1 20); do
+  if ss -lnt | grep -Eq ':5901\s'; then
+    break
+  fi
+  sleep 1
+done
+
+if ! ss -lnt | grep -Eq ':5901\s'; then
+  echo "ERROR: El servidor VNC no está escuchando en 5901."
+  echo "Revisa que la sesión X esté activa y que el puerto 5901 no esté bloqueado."
+  exit 1
+fi
+
+# Prepara log para diagnóstico si Sunshine no responde.
+LOG_FILE="$HOME/.cache/sunshine.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+: > "$LOG_FILE"
+
 echo "Sunshine Web: Puertos > 47990 > Abrir"
 echo "Moonlight celular: Add Host -> IP Tailscale (sin puerto)"
 echo "Te pedirá PIN, ponlo en Sunshine Web > PIN"
-sunshine
+
+echo "Comprobando si la interfaz web responde en https://127.0.0.1:47990 ..."
+for i in $(seq 1 30); do
+  if curl -k -fsS --max-time 3 https://127.0.0.1:47990 >/dev/null 2>&1; then
+    echo "Sunshine respondió correctamente en https://127.0.0.1:47990"
+    break
+  fi
+  sleep 1
+done
+
+if ! curl -k -fsS --max-time 5 https://127.0.0.1:47990 >/dev/null 2>&1; then
+  echo "Advertencia: la interfaz web de Sunshine aún no responde en https://127.0.0.1:47990"
+  echo "Verifica que Tailscale esté activo para exponer 47990 y que el puerto no esté bloqueado."
+  echo "Diagnóstico rápido: ss -lnt | grep 47990"
+  echo "Si hace falta, vuelve a ejecutar este script tras iniciar Tailscale."
+fi
+
+# Ejecuta Sunshine con salida capturada para diagnosticar fallos reales.
+sunshine 2>&1 | tee "$LOG_FILE"
 EOS
 
 chmod +x ~/start-*.sh
