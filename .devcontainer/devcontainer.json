@@ -1,5 +1,5 @@
 {
-  "name": "Mi PC Virtual - Linux GUI + VNC",
+  "name": "Mi PC Virtual - Linux GUI + VNC + Moonlight",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   
   "features": {
@@ -25,10 +25,14 @@
 
   "postCreateCommand": "bash .devcontainer/setup-gui.sh",
 
-  "forwardPorts": [5901, 6080, 3389],
+  "forwardPorts": [5901, 6080, 47984, 47989, 47990, 48010, 3389],
   "portsAttributes": {
-    "5901": { "label": "VNC", "onAutoForward": "notify" },
-    "6080": { "label": "noVNC Web", "onAutoForward": "notify" },
+    "5901": { "label": "VNC - RVNC Viewer", "onAutoForward": "notify", "visibility": "public" },
+    "6080": { "label": "noVNC Web - Navegador Celular", "onAutoForward": "openBrowser", "visibility": "public" },
+    "47990": { "label": "Sunshine Web UI - Moonlight", "onAutoForward": "notify", "visibility": "public" },
+    "47984": { "label": "Sunshine Video - Moonlight", "onAutoForward": "silent", "visibility": "public" },
+    "47989": { "label": "Sunshine Control - Moonlight", "onAutoForward": "silent", "visibility": "public" },
+    "48010": { "label": "Sunshine RTSP - Moonlight", "onAutoForward": "silent", "visibility": "public" },
     "3389": { "label": "RDP", "onAutoForward": "notify" }
   },
 
