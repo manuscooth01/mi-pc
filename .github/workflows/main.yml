@@ -22,8 +22,24 @@ jobs:
           # Permitir RDP solo desde la red Tailscale (CGNAT 100.64.0.0/10)
           netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
 
-          # Reiniciar el servicio de Escritorio Remoto
-          Restart-Service -Name TermService -Force
+          # Reiniciar el servicio de Escritorio Remoto si está disponible.
+          $rdpService = Get-Service -Name TermService -ErrorAction SilentlyContinue
+          if ($rdpService) {
+              try {
+                  if ($rdpService.Status -ne 'Stopped') {
+                      Stop-Service -Name TermService -Force -ErrorAction Stop
+                  }
+                  Start-Service -Name TermService -ErrorAction Stop
+                  Write-Host "RDP service restarted successfully."
+              } catch {
+                  Write-Warning "No se pudo reiniciar TermService: $($_.Exception.Message)"
+                  try {
+                      Start-Service -Name TermService -ErrorAction SilentlyContinue
+                  } catch {}
+              }
+          } else {
+              Write-Warning "TermService no está disponible en este runner. Continuando sin reinicio."
+          }
 
       - name: Create RDP User with Secure Password
         env:
