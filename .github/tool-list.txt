@@ -1,0 +1,15 @@
+7zip
+git
+vscode
+notepadplusplus
+firefox
+nodejs-lts
+python
+dotnet-8.0-sdk
+openjdk17
+cmake
+ninja
+llvm
+rust
+go
+docker-cli
