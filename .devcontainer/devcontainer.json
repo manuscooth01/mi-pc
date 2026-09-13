@@ -1,5 +1,5 @@
 {
-  "name": "Mi PC Virtual - Linux Dev",
+  "name": "Mi PC Virtual - Linux GUI + VNC",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   
   "features": {
@@ -9,9 +9,7 @@
     "ghcr.io/devcontainers/features/go:1": { "version": "1.22" },
     "ghcr.io/devcontainers/features/rust:1": {},
     "ghcr.io/devcontainers/features/java:1": { "version": "17" },
-    "ghcr.io/devcontainers/features/dotnet:1": { "version": "8.0" },
-    "ghcr.io/devcontainers/features/kubectl-helm:1": {},
-    "ghcr.io/devcontainers/features/terraform:1": {}
+    "ghcr.io/devcontainers/features/dotnet:1": { "version": "8.0" }
   },
 
   "customizations": {
@@ -19,30 +17,20 @@
       "extensions": [
         "ms-azuretools.vscode-docker",
         "ms-python.python",
-        "ms-python.vscode-pylance",
-        "ms-dotnettools.csharp",
-        "golang.go",
-        "rust-lang.rust-analyzer",
-        "bradlc.vscode-tailwindcss",
-        "esbenp.prettier-vscode",
-        "dbaeumer.vscode-eslint",
-        "eamodio.gitlens",
-        "github.vscode-github-actions",
-        "redhat.vscode-yaml",
-        "ms-vscode.powershell",
         "github.copilot",
         "github.copilot-chat"
-      ],
-      "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash",
-        "editor.formatOnSave": true,
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
-        "workbench.colorTheme": "Default Dark Modern"
-      }
+      ]
     }
   },
 
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential curl wget git unzip software-properties-common",
+  "postCreateCommand": "bash .devcontainer/setup-gui.sh",
+
+  "forwardPorts": [5901, 6080, 3389],
+  "portsAttributes": {
+    "5901": { "label": "VNC", "onAutoForward": "notify" },
+    "6080": { "label": "noVNC Web", "onAutoForward": "notify" },
+    "3389": { "label": "RDP", "onAutoForward": "notify" }
+  },
 
   "remoteUser": "vscode"
 }
