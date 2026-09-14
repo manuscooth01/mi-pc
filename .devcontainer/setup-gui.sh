@@ -166,11 +166,11 @@ if ! command -v sunshine &> /dev/null; then
   
   if [ -n "$SUNSHINE_VERSION" ]; then
     echo "Version detectada: $SUNSHINE_VERSION"
-    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_$(echo ${SUNSHINE_VERSION} | sed 's/^v//')-1+ubuntu22.04_amd64.deb"
+    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_$(echo ${SUNSHINE_VERSION} | sed 's/^v//')-1%2Bubuntu22.04_amd64.deb"
   else
     # URL directa como fallback (version verificada)
     echo "No se pudo obtener version desde API, usando URL directa..."
-    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/v2026.906.222525/sunshine_2026.906.222525-1+ubuntu22.04_amd64.deb"
+    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/v2026.906.222525/sunshine_2026.906.222525-1%2Bubuntu22.04_amd64.deb"
   fi
   
   echo "Descargando desde: $SUNSHINE_URL"
@@ -179,7 +179,7 @@ if ! command -v sunshine &> /dev/null; then
   # Instalar dependencias necesarias primero
   sudo apt-get install -y --no-install-recommends wget libva2 libvdpau1 libpulse0 libx11-6 libxrandr2 libxcb1 libssl3 2>/dev/null || true
   
-  if wget --timeout=60 -O /tmp/sunshine.deb "$SUNSHINE_URL"; then
+  if curl -L --max-time 120 -o /tmp/sunshine.deb "$SUNSHINE_URL"; then
     echo "Descarga completa. Instalando..."
     sudo dpkg -i /tmp/sunshine.deb || {
       echo "Error en dpkg, instalando dependencias..."
