@@ -25,7 +25,7 @@ ok "Dependencias instaladas"
 
 # VNC headless
 mkdir -p ~/.vnc
-echo "12345678" | vncpasswd -f > ~/.vnc/passwd
+echo "12345678" | tightvncpasswd -f > ~/.vnc/passwd
 chmod 600 ~/.vnc/passwd
 
 cat > ~/.vnc/xstartup << 'EOF'
