@@ -1,5 +1,5 @@
 {
-  "name": "Mi PC Virtual - Linux GUI",
+  "name": "Moonlight Server (Sunshine)",
   "image": "mcr.microsoft.com/devcontainers/base:jammy",
   "customizations": {
     "vscode": {
@@ -9,10 +9,8 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/setup-gui.sh",
-  "forwardPorts": [5901, 6080, 47984, 47989, 47990, 48010],
+  "forwardPorts": [47984, 47989, 47990, 48010],
   "portsAttributes": {
-    "5901": { "label": "VNC", "onAutoForward": "notify", "visibility": "public" },
-    "6080": { "label": "noVNC Web", "onAutoForward": "openBrowser", "visibility": "public" },
     "47984": { "label": "Sunshine RTSP", "onAutoForward": "notify", "visibility": "public" },
     "47989": { "label": "Sunshine Web", "onAutoForward": "notify", "visibility": "public" },
     "47990": { "label": "Sunshine Pair", "onAutoForward": "notify", "visibility": "public" },
