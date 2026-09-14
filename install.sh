@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Instala Sunshine + Tailscale para Moonlight
+# install.sh - Instala Sunshine + Tailscale para Moonlight (Codespaces ready)
 set -e
 
 RED='\033[0;31m'
@@ -20,7 +20,7 @@ warn "Instalando dependencias..."
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
   curl wget libva2 libvdpau1 libpulse0 libx11-6 libxrandr2 libxcb1 libssl3 \
-  tigervnc-standalone-server tigervnc-common || true
+  tigervnc-standalone-server tigervnc-common tightvncpasswd || true
 ok "Dependencias instaladas"
 
 # VNC headless
@@ -88,7 +88,7 @@ CONF
 CREDS
 ok "Configuración Sunshine lista"
 
-# Script inicio
+# Script inicio Sunshine
 cat > ~/start-sunshine.sh << 'EOS'
 #!/bin/bash
 export DISPLAY=:1
@@ -129,16 +129,40 @@ EOS
 chmod +x ~/start-sunshine.sh
 ok "Script start-sunshine.sh creado"
 
+# Script inicio Tailscale (Codespaces)
+cat > ~/start-tailscale.sh << 'EOS'
+#!/bin/bash
+echo "=== Conectando Tailscale ==="
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then
+  echo "Usando TAILSCALE_AUTH_KEY..."
+  sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname=codespace-${CODESPACE_NAME:-gui}
+elif [ -n "$1" ]; then
+  echo "Usando auth key proporcionada..."
+  sudo tailscale up --authkey="$1" --hostname=codespace-${CODESPACE_NAME:-gui}
+else
+  echo "Login interactivo (abrir link en navegador/celular):"
+  sudo tailscale up --hostname=codespace-${CODESPACE_NAME:-gui}
+fi
+echo ""
+echo "Esperando IP..."
+sleep 3
+tailscale ip -4
+EOS
+chmod +x ~/start-tailscale.sh
+ok "Script start-tailscale.sh creado"
+
 # Aliases
 grep -q "alias moonlight=" ~/.bashrc || cat >> ~/.bashrc << 'ALIASES'
 
 # Moonlight
 alias moonlight='~/start-sunshine.sh'
 alias moonlog='tail -f /tmp/sunshine.log'
+alias ts='~/start-tailscale.sh'
+alias tsip='tailscale ip -4'
 ALIASES
 ok "Aliases agregados"
 
-# Tailscale
+# Tailscale (feature en Codespaces, apt en local)
 if ! command -v tailscale &>/dev/null; then
   warn "Instalando Tailscale..."
   curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null 2>&1 || true
@@ -147,7 +171,7 @@ if ! command -v tailscale &>/dev/null; then
   sudo apt-get install -y tailscale || true
   ok "Tailscale instalado"
 else
-  ok "Tailscale ya instalado"
+  ok "Tailscale ya disponible"
 fi
 
 echo ""
@@ -156,10 +180,16 @@ echo -e "${GREEN}INSTALACION COMPLETA${NC}"
 echo "=========================================="
 echo ""
 echo "USO:"
-echo "  moonlight     -> inicia Sunshine"
-echo "  moonlog       -> ver logs"
-echo "  tailscale up  -> conecta VPN"
-echo "  tailscale ip -4  -> IP para Moonlight"
+echo "  moonlight        -> inicia Sunshine"
+echo "  moonlog          -> ver logs"
+echo "  ts [auth-key]    -> conecta Tailscale"
+echo "  tsip             -> IP para Moonlight"
+echo ""
+echo "EN GITHUB CODESPACES:"
+echo "  1. Agrega secret TAILSCALE_AUTH_KEY (opcional)"
+echo "  2. Ejecuta: ts"
+echo "  3. Ejecuta: tsip"
+echo "  4. Usa esa IP en Moonlight app"
 echo ""
 echo "CREDENCIALES:"
 echo "  Sunshine Web: codespace / codespace"
