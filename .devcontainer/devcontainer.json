@@ -1,6 +1,9 @@
 {
   "name": "Moonlight Server (Sunshine)",
   "image": "mcr.microsoft.com/devcontainers/base:jammy",
+  "features": {
+    "ghcr.io/devcontainers/features/tailscale:1": {}
+  },
   "customizations": {
     "vscode": {
       "extensions": [

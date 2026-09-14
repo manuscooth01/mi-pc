@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-sunshine.sh - Instala Sunshine para Moonlight (sin GUI)
+# setup-sunshine.sh - Instala Sunshine para Moonlight
 set -e
 
 echo "=== Instalando Sunshine para Moonlight ==="
@@ -8,11 +8,11 @@ echo "=== Instalando Sunshine para Moonlight ==="
 sudo apt-get update || true
 sudo apt-get install -y --no-install-recommends \
   libva2 libvdpau1 libpulse0 libx11-6 libxrandr2 libxcb1 libssl3 \
-  curl wget tigervnc-standalone-server tigervnc-common || true
+  curl wget tigervnc-standalone-server tigervnc-common tightvncpasswd || true
 
 # Configurar VNC headless (necesario para display X)
 mkdir -p ~/.vnc
-echo "12345678" | vncpasswd -f > ~/.vnc/passwd || true
+echo "12345678" | tightvncpasswd -f > ~/.vnc/passwd || true
 chmod 600 ~/.vnc/passwd || true
 
 cat > ~/.vnc/xstartup << 'EOF'
@@ -94,7 +94,7 @@ if [ ! -f "$SUNSHINE_CONFIG_DIR/accounts.json" ]; then
 CREDS
 fi
 
-# Script de inicio
+# Script de inicio Sunshine
 cat > ~/start-sunshine.sh << 'EOS'
 #!/bin/bash
 export DISPLAY=:1
@@ -107,7 +107,7 @@ if ! pgrep -x Xtigervnc >/dev/null 2>&1; then
   sleep 2
 fi
 
-pkill -f sunshine 2>/dev/null || true
+pkill sunshine 2>/dev/null || true
 sleep 1
 
 echo "=== Sunshine para Moonlight ==="
@@ -115,9 +115,9 @@ echo "Streaming: puerto 47990"
 echo "Web UI: https://localhost:47991 (codespace/codespace)"
 echo ""
 echo "Moonlight en celular:"
-echo "  1. Conecta Tailscale (mismo login)"
-echo "  2. IP: tailscale ip -4"
-echo "  3. Moonlight > Add Host > IP (sin puerto)"
+echo "  1. tailscale up (mismo login)"
+echo "  2. tailscale ip -4"
+echo "  3. Moonlight > Add Host > IP"
 echo "  4. Pair con PIN en Web UI"
 echo ""
 
@@ -141,34 +141,61 @@ done
 EOS
 chmod +x ~/start-sunshine.sh
 
-# Alias
-cat >> ~/.bashrc << 'ALIASES'
+# Script de inicio Tailscale (para Codespaces con feature)
+cat > ~/start-tailscale.sh << 'EOS'
+#!/bin/bash
+# Tailscale en Codespaces con feature ya instalado
 
-# Aliases - Moonlight
-alias moonlight='~/start-sunshine.sh'
-alias moonlog='tail -f /tmp/sunshine.log'
-ALIASES
-source ~/.bashrc 2>/dev/null || true
+echo "=== Conectando Tailscale ==="
 
-# Tailscale
-if ! command -v tailscale &> /dev/null; then
-  echo "Instalando Tailscale..."
-  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null || true
-  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null || true
-  sudo apt-get update || true
-  sudo apt-get install -y tailscale || true
+# En Codespaces, tailscaled ya corre como servicio
+# Solo necesitamos hacer 'up'
+
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then
+  echo "Usando TAILSCALE_AUTH_KEY..."
+  sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname=codespace-${CODESPACE_NAME:-gui}
+elif [ -n "$1" ]; then
+  echo "Usando auth key proporcionada..."
+  sudo tailscale up --authkey="$1" --hostname=codespace-${CODESPACE_NAME:-gui}
+else
+  echo "Login interactivo (abrir link en navegador/celular):"
+  sudo tailscale up --hostname=codespace-${CODESPACE_NAME:-gui}
 fi
 
 echo ""
+echo "Esperando IP..."
+sleep 3
+tailscale ip -4
+EOS
+chmod +x ~/start-tailscale.sh
+
+# Aliases
+cat >> ~/.bashrc << 'ALIASES'
+
+# Moonlight
+alias moonlight='~/start-sunshine.sh'
+alias moonlog='tail -f /tmp/sunshine.log'
+alias ts='~/start-tailscale.sh'
+alias tsip='tailscale ip -4'
+ALIASES
+source ~/.bashrc 2>/dev/null || true
+
+echo ""
 echo "=========================================="
-echo "  SUNSHINE + TAILSCALE LISTO"
+echo "  SUNSHINE + TAILSCALE LISTO (Codespaces)"
 echo "=========================================="
 echo ""
 echo "COMANDOS:"
-echo "  moonlight    -> inicia Sunshine"
-echo "  moonlog      -> ver logs"
-echo "  tailscale up -> conectar VPN"
-echo "  tailscale ip -4  -> ver IP para Moonlight"
+echo "  moonlight        -> inicia Sunshine"
+echo "  moonlog          -> ver logs"
+echo "  ts [auth-key]    -> conecta Tailscale"
+echo "  tsip             -> IP para Moonlight"
+echo ""
+echo "EN CODESPACES:"
+echo "  1. Agrega secret TAILSCALE_AUTH_KEY (opcional)"
+echo "  2. Ejecuta: ts"
+echo "  3. Ejecuta: tsip"
+echo "  4. Usa esa IP en Moonlight app"
 echo ""
 echo "CREDENCIALES SUNSHINE: codespace / codespace"
 echo "PASS VNC: 12345678"
