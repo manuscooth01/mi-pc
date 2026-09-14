@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-gui.sh - GUI ligera + VNC + noVNC + Tailscale con LOGIN LINK + Sunshine Moonlight
+# setup-gui.sh - GUI ligera + VNC + noVNC + Tailscale + Sunshine Moonlight
 set -e
 
 echo "=== Instalando GUI ligera (XFCE + VNC + noVNC) ==="
@@ -46,7 +46,7 @@ rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 vncserver :1 -geometry 1280x720 -depth 24 -localhost no || tightvncserver :1 -geometry 1280x720 -depth 24 || echo "Error VNC"
 sleep 2
 pkill -f websockify 2>/dev/null || true
-websockify --web=/usr/share/novnc -D 6080 localhost:5901 2>/dev/null || nohup websockify --web=/usr/share/novnc 6080 localhost:5901 > /tmp/novnc.log 2>&1 &
+websockify --web=/usr/share/novnc 6080 localhost:5901 &
 sleep 1
 echo ""
 echo "=========================================="
@@ -57,7 +57,16 @@ echo "  Puerto 6080 -> Puertos > 6080 > Abrir"
 echo "  Pass: 12345678"
 echo ""
 echo "VNC directo / Moonlight (con Tailscale):"
-tailscale ip -4 2>/dev/null && echo "  IP: $(tailscale ip -4) -> RVNC Viewer $(tailscale ip -4):5901" || echo "  Ejecuta: ~/start-tailscale.sh  (te dara link de login)"
+if command -v tailscale &>/dev/null; then
+  TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
+  if [ -n "$TS_IP" ]; then
+    echo "  IP: $TS_IP -> RVNC Viewer $TS_IP:5901"
+  else
+    echo "  Ejecuta: ~/start-tailscale.sh  (te dara link de login)"
+  fi
+else
+  echo "  Tailscale no instalado. Ejecuta: ~/start-tailscale.sh"
+fi
 echo "=========================================="
 EOS
 
@@ -71,7 +80,7 @@ EOS
 cat > ~/start-novnc.sh << 'EOS'
 #!/bin/bash
 pkill -f websockify 2>/dev/null; true
-websockify --web=/usr/share/novnc -D 6080 localhost:5901 --daemon
+websockify --web=/usr/share/novnc 6080 localhost:5901 &
 echo "noVNC en 6080 - Abre en Puertos > 6080"
 EOS
 
@@ -99,27 +108,26 @@ elif [ -n "$TAILSCALE_AUTH_KEY" ]; then
 else
   echo ""
   echo "=== TAILSCALE LOGIN CON LINK (sin API key) ==="
-  echo "Se abrirá un link de autenticación. Ábrelo en tu celular/navegador y loguéate."
+  echo "Se abrira un link de autenticacion. Abrelo en tu celular/navegador y logueate."
   echo ""
-  # Intentar login interactivo que da link
   sudo tailscale --socket=/tmp/tailscaled.sock up --hostname=codespace-gui-${CODESPACE_NAME:-gui} 2>&1 || sudo tailscale up --hostname=codespace-gui 2>&1 || true
   echo ""
   echo "Si arriba viste un link tipo https://login.tailscale.com/a/xxxxxxxx"
-  echo "Ábrelo en tu celular/navegador y autoriza."
+  echo "Abrelo en tu celular/navegador y autoriza."
   echo ""
-  echo "Después de autorizar, ejecuta: tailscale ip -4"
+  echo "Despues de autorizar, ejecuta: tailscale ip -4"
 fi
 
 echo ""
 echo "Esperando IP..."
 sleep 2
-tailscale --socket=/tmp/tailscaled.sock ip -4 2>/dev/null || tailscale ip -4 2>/dev/null || echo "Aún sin IP. Si usaste link, autoriza el link de arriba y luego ejecuta: tailscale ip -4"
+tailscale --socket=/tmp/tailscaled.sock ip -4 2>/dev/null || tailscale ip -4 2>/dev/null || echo "Aun sin IP. Si usaste link, autoriza el link de arriba y luego ejecuta: tailscale ip -4"
 echo ""
 EOS
 
 cat > ~/start-tailscale-login.sh << 'EOS'
 #!/bin/bash
-# Solo link, sin key - el más fácil
+# Solo link, sin key - el mas facil
 echo "=== TAILSCALE LOGIN CON LINK ==="
 if ! pgrep -x tailscaled > /dev/null; then
   sudo rm -rf /tmp/tailscaled.sock /tmp/tailscaled.state 2>/dev/null; true
@@ -131,86 +139,141 @@ echo ""
 sudo tailscale --socket=/tmp/tailscaled.sock up --hostname=codespace-gui 2>&1 | tee /tmp/ts-login.txt
 cat /tmp/ts-login.txt
 echo ""
-echo "Después de abrir el link y loguearte:"
+echo "Despues de abrir el link y loguearte:"
 echo "  tailscale ip -4"
 echo "Esa IP la usas en RVNC Viewer y Moonlight"
 EOS
 
 cat > ~/start-sunshine.sh << 'EOS'
 #!/bin/bash
-set -Eeuo pipefail
+# start-sunshine.sh - Instala y ejecuta Sunshine para Moonlight
 
 echo "=== Sunshine para Moonlight ==="
 
-# Verifica que la herramienta exista antes de seguir.
-if ! command -v sunshine &> /dev/null; then
-  echo "Instalando Sunshine..."
-  SUNSHINE_URL=$(curl -fsSL https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep "browser_download_url.*ubuntu-22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
-  if [ -n "$SUNSHINE_URL" ]; then
-    wget -q -O /tmp/sunshine.deb "$SUNSHINE_URL" && sudo apt-get install -y /tmp/sunshine.deb || sudo dpkg -i /tmp/sunshine.deb || true
-  else
-    echo "No se pudo descargar Sunshine. Usa VNC."
-    exit 1
-  fi
-fi
-
-# Seguridad básica del entorno.
-export DISPLAY=:1
-if [[ -z "${DISPLAY:-}" ]]; then
-  echo "ERROR: DISPLAY no está definido."
-  exit 1
-fi
-
-# Asegura que el escritorio remoto esté disponible antes de abrir Sunshine.
+# Verificar que VNC este activo (Sunshine necesita un display X)
 if ! pgrep -x Xvnc >/dev/null 2>&1 && ! pgrep -x Xtigervnc >/dev/null 2>&1 && ! pgrep -x vncserver >/dev/null 2>&1; then
   echo "No se detecta VNC activo; iniciando VNC en :1..."
   vncserver :1 -geometry 1280x720 -depth 24 -localhost no 2>/dev/null || true
+  sleep 2
 fi
 
-# Espera a que VNC escuche en 5901 antes de arrancar la UI.
-for i in $(seq 1 20); do
-  if ss -lnt | grep -Eq ':5901\s'; then
-    break
+# Instalar Sunshine si no existe
+if ! command -v sunshine &> /dev/null; then
+  echo "Instalando Sunshine..."
+  SUNSHINE_VERSION=$(curl -fsSL https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
+  if [ -z "$SUNSHINE_VERSION" ]; then
+    echo "No se pudo obtener la version de Sunshine."
+    exit 1
   fi
-  sleep 1
-done
-
-if ! ss -lnt | grep -Eq ':5901\s'; then
-  echo "ERROR: El servidor VNC no está escuchando en 5901."
-  echo "Revisa que la sesión X esté activa y que el puerto 5901 no esté bloqueado."
-  exit 1
+  echo "Version detectada: $SUNSHINE_VERSION"
+  
+  SUNSHINE_URL=$(curl -fsSL "https://api.github.com/repos/LizardByte/Sunshine/releases/tags/${SUNSHINE_VERSION}" | grep "browser_download_url.*ubuntu22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
+  
+  if [ -z "$SUNSHINE_URL" ]; then
+    echo "No se encontro paquete .deb para Ubuntu 22.04 amd64."
+    echo "Intentando URL directa..."
+    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_$(echo ${SUNSHINE_VERSION} | sed 's/^v//')-1+ubuntu22.04_amd64.deb"
+  fi
+  
+  echo "Descargando desde: $SUNSHINE_URL"
+  wget -q -O /tmp/sunshine.deb "$SUNSHINE_URL" && sudo apt-get install -y /tmp/sunshine.deb || sudo dpkg -i /tmp/sunshine.deb || {
+    echo "Error instalando Sunshine. Intentando con dependencias..."
+    sudo apt-get install -f -y || true
+    sudo dpkg -i /tmp/sunshine.deb || { echo "Fallo la instalacion de Sunshine."; exit 1; }
+  }
+  rm -f /tmp/sunshine.deb
 fi
 
-# Prepara log para diagnóstico si Sunshine no responde.
-LOG_FILE="$HOME/.cache/sunshine.log"
-mkdir -p "$(dirname "$LOG_FILE")"
-: > "$LOG_FILE"
+# Configurar Sunshine
+export DISPLAY=:1
+SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
+mkdir -p "$SUNSHINE_CONFIG_DIR"
 
-echo "Sunshine Web: Puertos > 47990 > Abrir"
-echo "Moonlight celular: Add Host -> IP Tailscale (sin puerto)"
-echo "Te pedirá PIN, ponlo en Sunshine Web > PIN"
+# Crear configuracion si no existe
+if [ ! -f "$SUNSHINE_CONFIG_DIR/sunshine.conf" ]; then
+  cat > "$SUNSHINE_CONFIG_DIR/sunshine.conf" << 'CONF'
+port = 47990
+origin_web_ui_allowed = *
+CONF
+fi
 
-echo "Comprobando si la interfaz web responde en https://127.0.0.1:47990 ..."
+# Crear credenciales si no existen
+if [ ! -f "$SUNSHINE_CONFIG_DIR/accounts.json" ]; then
+  cat > "$SUNSHINE_CONFIG_DIR/accounts.json" << 'CREDS'
+{
+  "creds": [
+    {
+      "username": "codespace",
+      "password": "codespace"
+    }
+  ]
+}
+CREDS
+  echo "Credenciales Sunshine: usuario=codespace, password=codespace"
+fi
+
+# Matar Sunshine previo
+pkill -f sunshine 2>/dev/null || true
+sleep 1
+
+echo ""
+echo "=========================================="
+echo "  SUNSHINE INICIANDO"
+echo "=========================================="
+echo "Web UI: Puertos > 47990 > Abrir en navegador"
+echo "Credenciales: codespace / codespace"
+echo ""
+echo "Moonlight celular:"
+echo "  1. Conecta Tailscale: ~/start-tailscale.sh"
+echo "  2. IP: tailscale ip -4"
+echo "  3. Moonlight > Add Host > IP (sin puerto)"
+echo "  4. PIN > Sunshine Web > PIN > Pair"
+echo "=========================================="
+echo ""
+
+# Ejecutar Sunshine en background
+nohup sunshine > /tmp/sunshine.log 2>&1 &
+SUNSHINE_PID=$!
+echo "Sunshine PID: $SUNSHINE_PID"
+
+# Esperar a que Sunshine este listo
+echo "Esperando a que Sunshine responda..."
 for i in $(seq 1 30); do
   if curl -k -fsS --max-time 3 https://127.0.0.1:47990 >/dev/null 2>&1; then
-    echo "Sunshine respondió correctamente en https://127.0.0.1:47990"
+    echo "Sunshine listo en https://127.0.0.1:47990"
     break
+  fi
+  if ! kill -0 $SUNSHINE_PID 2>/dev/null; then
+    echo "Sunshine se detuvo. Revisa /tmp/sunshine.log"
+    tail -20 /tmp/sunshine.log 2>/dev/null
+    exit 1
   fi
   sleep 1
 done
 
 if ! curl -k -fsS --max-time 5 https://127.0.0.1:47990 >/dev/null 2>&1; then
-  echo "Advertencia: la interfaz web de Sunshine aún no responde en https://127.0.0.1:47990"
-  echo "Verifica que Tailscale esté activo para exponer 47990 y que el puerto no esté bloqueado."
-  echo "Diagnóstico rápido: ss -lnt | grep 47990"
-  echo "Si hace falta, vuelve a ejecutar este script tras iniciar Tailscale."
+  echo "Advertencia: Sunshine no responde aun en 47990"
+  echo "Logs: /tmp/sunshine.log"
 fi
-
-# Ejecuta Sunshine con salida capturada para diagnosticar fallos reales.
-sunshine 2>&1 | tee "$LOG_FILE"
 EOS
 
 chmod +x ~/start-*.sh
+
+echo "=== Configurando alias ==="
+cat >> ~/.bashrc << 'ALIASES'
+
+# Aliases - Mi PC Virtual
+alias gui='~/start-gui.sh'
+alias vnc='~/start-vnc.sh'
+alias novnc='~/start-novnc.sh'
+alias sunshine='~/start-sunshine.sh'
+alias ts='~/start-tailscale.sh'
+alias tslogin='~/start-tailscale-login.sh'
+alias tsip='tailscale ip -4'
+alias vc='vncserver -list'
+alias vk='vncserver -kill :1'
+ALIASES
+source ~/.bashrc 2>/dev/null || true
 
 echo "=== Instalando Tailscale ==="
 if ! command -v tailscale &> /dev/null; then
@@ -222,15 +285,26 @@ fi
 
 echo ""
 echo "=========================================="
-echo "  INSTALADO OK - LOGIN CON LINK"
+echo "  INSTALADO OK"
 echo "=========================================="
-echo "Para GUI: ~/start-gui.sh"
-echo "Para Tailscale SIN API KEY (con link):"
-echo "  ~/start-tailscale-login.sh"
-echo "  Te dará un link https://login.tailscale.com/a/xxxx"
-echo "  Ábrelo en tu celular y autoriza"
-echo "  Luego: tailscale ip -4"
 echo ""
-echo "Con API key (si la tienes):"
-echo "  ~/start-tailscale.sh tskey-xxx"
+echo "ALIASES (escribe estos comandos):"
+echo "  gui          -> inicia escritorio VNC+noVNC"
+echo "  sunshine     -> inicia Sunshine para Moonlight"
+echo "  ts           -> conecta Tailscale"
+echo "  tsip         -> muestra IP de Tailscale"
+echo "  tslogin      -> login Tailscale sin API key"
+echo "  vnc          -> solo VNC"
+echo "  novnc        -> solo noVNC web"
+echo "  vc           -> listar sesiones VNC"
+echo "  vk           -> matar sesion VNC"
+echo ""
+echo "CELULAR:"
+echo "  1. Instala Tailscale + Moonlight"
+echo "  2. Conecta Tailscale (mismo login)"
+echo "  3. Moonlight > Add Host > IP de tailscale"
+echo "  4. Pair con PIN en Sunshine Web"
+echo ""
+echo "CREDENCIALES SUNSHINE: codespace / codespace"
+echo "PASS VNC: 12345678"
 echo "=========================================="

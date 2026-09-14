@@ -29,15 +29,15 @@ vncserver -kill :1 2>/dev/null; rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/nu
 vncserver :1 -geometry 1280x720 -depth 24 -localhost no
 sleep 2
 pkill -f websockify 2>/dev/null; true
-websockify --web=/usr/share/novnc -D 6080 localhost:5901 --daemon
+websockify --web=/usr/share/novnc 6080 localhost:5901 &
 sleep 1
 
 echo ""
-echo "✅ GUI INICIADA"
-echo "Ve a pestaña PUERTOS > 6080 > click 🌐 Abrir en navegador"
+echo "GUI INICIADA"
+echo "Ve a pestaña PUERTOS > 6080 > click Abrir en navegador"
 echo "Password: 12345678"
 echo ""
-echo "Si quieres Tailscale para RVNC Viewer:"
-echo "  export TAILSCALE_AUTH_KEY=tskey-xxx"
+echo "Para Moonlight:"
+echo "  ~/start-sunshine.sh"
 echo "  ~/start-tailscale.sh"
 echo "  tailscale ip -4"

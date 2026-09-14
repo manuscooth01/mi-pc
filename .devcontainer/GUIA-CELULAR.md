@@ -1,10 +1,10 @@
-# 📱 Guía: Interfaz Gráfica Codespace en Celular
+# Guia: Interfaz Grafica Codespace en Celular
 
 Tienes 3 formas de ver el escritorio Linux desde tu celular.
 
 ---
 
-## 🚀 INICIO RÁPIDO (en Codespace)
+## INICIO RAPIDO (en Codespace)
 
 Abre una terminal en tu Codespace y ejecuta:
 
@@ -18,7 +18,7 @@ Esto inicia:
 
 ---
 
-## OPCIÓN 1: NAVEGADOR (Más fácil, sin instalar nada) ⭐ RECOMENDADA
+## OPCION 1: NAVEGADOR (Mas facil, sin instalar nada) RECOMENDADA
 
 Funciona en cualquier celular, solo necesitas Chrome/Safari.
 
@@ -27,11 +27,11 @@ Funciona en cualquier celular, solo necesitas Chrome/Safari.
 ~/start-gui.sh
 ```
 
-2. En la pestaña **PORTS** de VS Code (abajo), busca `noVNC Web 6080` y click en el icono de 🌐 para abrir en navegador.
+2. En la pestana **PORTS** de VS Code (abajo), busca `noVNC Web 6080` y click en el icono de globito para abrir en navegador.
 
    O abre manualmente:
    ```
-   https://TU-CODESPACE-NOMBRE-6080.app.github.dev/vnc.html
+   https://TU-CODESPACE-NOMBRE-6080.app.github.dev
    ```
 
 3. En tu celular:
@@ -39,13 +39,13 @@ Funciona en cualquier celular, solo necesitas Chrome/Safari.
    - Password: `12345678`
    - Ya ves XFCE completo
 
-**Ventaja:** No necesitas instalar Tailscale ni apps.
+**Ventaja:** No necesitas instalar nada mas.
 
 ---
 
-## OPCIÓN 2: RVNC VIEWER / RealVNC Viewer / AVNC (App VNC)
+## OPCION 2: RVNC VIEWER / RealVNC Viewer / AVNC (App VNC)
 
-Mucho más fluido que navegador, ideal para celular.
+Mucho mas fluido que navegador, ideal para celular.
 
 ### En Codespace:
 
@@ -69,19 +69,19 @@ Crea una **Reusable + Ephemeral**.
 
 ### En tu Celular:
 
-1. **Instala Tailscale** (Play Store / App Store) y loguéate con la misma cuenta.
+1. **Instala Tailscale** (Play Store / App Store) y logueate con la misma cuenta.
 2. **Instala una de estas apps:**
    - **RealVNC Viewer** (oficial, gratis)
    - **RVNC Viewer** (ligero)
    - **AVNC** (Android, open source, muy bueno)
    - **bVNC**
 
-3. **Nueva conexión:**
+3. **Nueva conexion:**
    - **Address / Host:** `100.91.180.66:5901` (la IP que te dio Tailscale)
    - **Name:** Codespace
    - **Password:** `12345678`
 
-4. **Conectar** - Verás XFCE. Puedes cambiar resolución:
+4. **Conectar** - Veras XFCE. Puedes cambiar resolucion:
 ```bash
 vncserver -kill :1
 vncserver :1 -geometry 720x1280 -depth 24  # vertical para celular
@@ -95,58 +95,66 @@ vncpasswd
 
 ---
 
-## OPCIÓN 3: MOONLIGHT (Más fluido, 60fps, ideal para juegos/apps)
+## OPCION 3: MOONLIGHT (Mas fluido, 60fps, ideal para juegos/apps)
 
-Moonlight es mucho más rápido que VNC porque usa Sunshine (codificación por hardware/software optimizada).
+Moonlight es mucho mas rapido que VNC porque usa Sunshine (codificacion por hardware/software optimizada).
+
+### Requisitos en tu Celular:
+
+1. **Tailscale** instalado y logueado (misma red que Codespace)
+2. **Moonlight** instalado:
+   - Android: Play Store > Moonlight Game Streaming
+   - iOS: App Store > Moonlight
 
 ### En Codespace:
 
 ```bash
+# 1. Inicia el escritorio
 ~/start-gui.sh
-~/start-tailscale.sh tskey-xxxxx
+
+# 2. Conecta Tailscale (si no lo hiciste)
+~/start-tailscale.sh
+# O con API key:
+~/start-tailscale.sh tskey-auth-xxxxx
+
+# 3. Inicia Sunshine
 ~/start-sunshine.sh
 ```
 
-Esto abre Sunshine en `http://localhost:47990`
+### Configurar Sunshine:
 
-1. En Codespace, abre en navegador:
-   ```
-   https://TU-CODESPACE-47990.app.github.dev/
-   ```
-   O haz port forward de 47990 y abre `http://localhost:47990`
+1. En Codespace, abre la pestana **PORTS** y busca `Sunshine Pair 47990`
+2. Click en el icono de globito para abrir `https://TU-CODESPACE-47990.app.github.dev`
+3. Te pedira crear usuario/password. Crea uno (ej: `codespace`/`codespace`)
 
-2. Te pedirá crear usuario/password para Sunshine la primera vez. Créalo.
+### En tu Celular (Moonlight):
 
-### En tu Celular:
+1. Abre Moonlight
+2. Pulsa `+` o **Add Host Manually**
+3. Escribe la IP de Tailscale (sin puerto): `100.91.180.66`
+4. Te mostrara un PIN de 4 digitos, ej: `1234`
 
-1. **Tailscale** instalado y conectado (misma red que Codespace).
-2. **Instala Moonlight:**
-   - Android: Play Store > Moonlight Game Streaming
-   - iOS: App Store > Moonlight
+5. En Codespace (navegador Sunshine):
+   - Ve a `https://TU-CODESPACE-47990.app.github.dev`
+   - Tab **PIN**
+   - Ingresa el PIN de Moonlight
+   - Click **Pair**
 
-3. **Agregar Host Manualmente:**
-   - Abre Moonlight > Pulsa `+` o `Add Host Manually`
-   - IP: `100.91.180.66` (tu IP Tailscale del Codespace, SIN puerto)
-   - Te mostrará un PIN de 4 dígitos, ej: `1234`
+6. Listo: Te aparecera `Desktop` en Moonlight. Tocalo y veras XFCE a 60fps.
 
-4. **En Codespace (navegador Sunshine):**
-   - Ve a `http://localhost:47990` > Tab **PIN** > Ingresa el PIN de Moonlight > Pair
+### Puertos Sunshine (deben estar abiertos en Tailscale):
 
-5. **Listo:** Te aparecerá `Desktop` en Moonlight. Tócalo y verás XFCE a 60fps.
+- 47984/tcp (RTSP)
+- 47989/tcp (Web UI)
+- 47990/tcp (Pairing)
+- 48010/tcp (Control)
+- 47998-48000/udp (Video/Audio streaming)
 
-**Config Sunshine:** `~/.config/sunshine/sunshine.conf`
-- Ya está en modo software (sin GPU, compatible con Codespace)
-- Puedes subir fps: `fps = 60`
-
-**Puertos Sunshine que deben estar abiertos:**
-- 47984/tcp, 47989/tcp, 47990/tcp, 48010/tcp
-- 47998-48000/udp
-
-Si no conecta, abre todos en Tailscale (ya están permitidos por defecto).
+Si no conecta, verifica que Tailscale este activo y que los puertos no esten bloqueados.
 
 ---
 
-## 📐 Resoluciones recomendadas para celular
+## Resoluciones recomendadas para celular
 
 ```bash
 # Vertical (celular en mano)
@@ -161,7 +169,7 @@ vncserver -kill :1 && vncserver :1 -geometry 1920x1080
 
 ---
 
-## 🔧 Comandos útiles
+## Comandos utiles
 
 ```bash
 ~/start-gui.sh       # Inicia VNC + noVNC
@@ -170,23 +178,24 @@ vncserver -kill :1 && vncserver :1 -geometry 1920x1080
 ~/start-sunshine.sh  # Sunshine para Moonlight
 ~/start-tailscale.sh tskey-xxx  # Conectar Tailscale
 vncserver -list      # Ver sesiones
-vncserver -kill :1   # Matar sesión
+vncserver -kill :1   # Matar sesion
 vncpasswd            # Cambiar password VNC
 tailscale ip -4      # Ver tu IP
 ```
 
 ---
 
-## ❓ ¿Cuál usar?
+## Cual usar?
 
-- **Solo probar rápido:** Opción 1 (navegador, noVNC)
-- **Uso diario celular:** Opción 2 (RVNC Viewer + Tailscale) - balance fluidez/fácil
-- **Máxima fluidez/juegos:** Opción 3 (Moonlight + Sunshine + Tailscale)
+- **Solo probar rapido:** Opcion 1 (navegador, noVNC)
+- **Uso diario celular:** Opcion 2 (RVNC Viewer + Tailscale) - balance fluidez/facil
+- **Maxima fluidez/juegos:** Opcion 3 (Moonlight + Sunshine + Tailscale)
 
 ---
 
-## ⚠️ Notas Codespaces
+## Notas Codespaces
 
 - El Codespace se apaga tras 30 min inactivo por defecto. Ve a Settings > Codespaces > Timeout.
 - Sin Tailscale, el VNC directo por `app.github.dev` NO funciona con apps VNC nativas (solo noVNC web), porque GitHub usa HTTPS y VNC necesita TCP crudo. Por eso Tailscale es obligatorio para RVNC Viewer y Moonlight.
 - Moonlight sin GPU usa CPU, puede tener lag pero sigue siendo mejor que VNC.
+- Sunshine en Codespaces corre en modo software (sin GPU dedicada). Puede ser suficiente para escritorio y apps basicas.
