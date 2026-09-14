@@ -160,28 +160,39 @@ fi
 # Instalar Sunshine si no existe
 if ! command -v sunshine &> /dev/null; then
   echo "Instalando Sunshine..."
-  SUNSHINE_VERSION=$(curl -fsSL https://api.github.com/repos/LizardByte/Sunshine/releases/latest | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
-  if [ -z "$SUNSHINE_VERSION" ]; then
-    echo "No se pudo obtener la version de Sunshine."
-    exit 1
-  fi
-  echo "Version detectada: $SUNSHINE_VERSION"
   
-  SUNSHINE_URL=$(curl -fsSL "https://api.github.com/repos/LizardByte/Sunshine/releases/tags/${SUNSHINE_VERSION}" | grep "browser_download_url.*ubuntu22.04.*amd64.deb" | cut -d '"' -f 4 | head -n1)
+  # Intentar obtener version desde GitHub API
+  SUNSHINE_VERSION=$(curl -fsSL --max-time 10 https://api.github.com/repos/LizardByte/Sunshine/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | cut -d '"' -f 4 || echo "")
   
-  if [ -z "$SUNSHINE_URL" ]; then
-    echo "No se encontro paquete .deb para Ubuntu 22.04 amd64."
-    echo "Intentando URL directa..."
+  if [ -n "$SUNSHINE_VERSION" ]; then
+    echo "Version detectada: $SUNSHINE_VERSION"
     SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/${SUNSHINE_VERSION}/sunshine_$(echo ${SUNSHINE_VERSION} | sed 's/^v//')-1+ubuntu22.04_amd64.deb"
+  else
+    # URL directa como fallback (version verificada)
+    echo "No se pudo obtener version desde API, usando URL directa..."
+    SUNSHINE_URL="https://github.com/LizardByte/Sunshine/releases/download/v2026.906.222525/sunshine_2026.906.222525-1+ubuntu22.04_amd64.deb"
   fi
   
   echo "Descargando desde: $SUNSHINE_URL"
-  wget -q -O /tmp/sunshine.deb "$SUNSHINE_URL" && sudo apt-get install -y /tmp/sunshine.deb || sudo dpkg -i /tmp/sunshine.deb || {
-    echo "Error instalando Sunshine. Intentando con dependencias..."
-    sudo apt-get install -f -y || true
-    sudo dpkg -i /tmp/sunshine.deb || { echo "Fallo la instalacion de Sunshine."; exit 1; }
-  }
-  rm -f /tmp/sunshine.deb
+  echo "Esto puede tardar 1-2 minutos..."
+  
+  # Instalar dependencias necesarias primero
+  sudo apt-get install -y --no-install-recommends wget libva2 libvdpau1 libpulse0 libx11-6 libxrandr2 libxcb1 libssl3 2>/dev/null || true
+  
+  if wget --timeout=60 -O /tmp/sunshine.deb "$SUNSHINE_URL"; then
+    echo "Descarga completa. Instalando..."
+    sudo dpkg -i /tmp/sunshine.deb || {
+      echo "Error en dpkg, instalando dependencias..."
+      sudo apt-get install -f -y || true
+      sudo dpkg -i /tmp/sunshine.deb || { echo "FALLO la instalacion de Sunshine."; exit 1; }
+    }
+    rm -f /tmp/sunshine.deb
+    echo "Sunshine instalado correctamente."
+  else
+    echo "FALLO la descarga de Sunshine."
+    echo "URL: $SUNSHINE_URL"
+    exit 1
+  fi
 fi
 
 # Configurar Sunshine
