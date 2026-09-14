@@ -98,7 +98,7 @@ if ! pgrep -x Xtigervnc >/dev/null 2>&1; then
   vncserver :1 -geometry 1280x720 -depth 24 -localhost no
   sleep 2
 fi
-pkill -f sunshine 2>/dev/null || true
+pkill sunshine 2>/dev/null || true
 sleep 1
 echo "=== Sunshine para Moonlight ==="
 echo "Streaming: 47990"
