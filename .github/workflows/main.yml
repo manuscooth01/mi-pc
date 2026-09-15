@@ -1,45 +1,53 @@
-name: Windows Cloud PC - AnyDesk Mejorado
+name: Windows Cloud PC - AnyDesk
 on:
   workflow_dispatch:
 jobs:
   build:
-    name: Iniciando Sistema Reforzado
+    name: Iniciando Sistema
     runs-on: windows-latest
-    timeout-minutes: 10080
-    env:
-      PROCESSOR_COUNT: 8
-      OPENGL: "1"
-      GITHUB_PRESERVE_WORKFLOW: true
-      MEMORY_GB: 16
+    timeout-minutes: 360
     steps:
-      - name: Descargar e Instalar Esenciales
+      - name: Instalar AnyDesk
         run: |
-          Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat" -UseBasicParsing
-          cmd /c Downloads.bat
-      - name: Iniciar AnyDesk
+          choco install anydesk -y --force
+        shell: pwsh
+
+      - name: Configurar y arrancar AnyDesk
         run: |
-          if (Test-Path "start.bat") {
-            cmd /c start.bat
-            Start-Sleep -Seconds 10
-          } else {
-            Write-Host "ERROR: Archivo start.bat no encontrado — verifique la descarga."
+          $exe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "ERROR: AnyDesk no se encontró en $exe"
             exit 1
           }
-      - name: Monitoreo Continuo y Reinicio Automático
+
+          # Contraseña de acceso desatendido (opcional, cámbiala)
+          $pass = "MiClaveSegura123"
+          & $exe --set-password $pass | Out-Null
+          Start-Sleep -Seconds 5
+
+          # Arrancar AnyDesk
+          Start-Process -FilePath $exe
+          Start-Sleep -Seconds 15
+
+          # Mostrar el ID para conectarse
+          Write-Host "=== AnyDesk ID ==="
+          & $exe --get-id
+        shell: pwsh
+
+      - name: Monitoreo y reinicio automático
         run: |
+          $exe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
           while ($true) {
-            $anydesk = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
-            if (-not $anydesk -or $anydesk.HasExited) {
-              Write-Host "Reiniciando AnyDesk..."
-              cmd /c start.bat
+            $p = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+            if (-not $p) {
+              Write-Host "AnyDesk caído. Reiniciando..."
+              Start-Process -FilePath $exe
             }
             Start-Sleep -Seconds 60
           }
-      - name: Mantener Sistema Activo
-        run: |
-          Start-Sleep -Seconds 604800
-      - name: Limpieza Segura
+        shell: pwsh
+
+      - name: Limpieza final
         if: always()
-        run: |
-          Remove-Item Downloads.bat -Force -ErrorAction SilentlyContinue
-          Write-Host "Limpieza finalizada."
+        run: Write-Host "Job finalizado."
+        shell: pwsh
