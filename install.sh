@@ -20,7 +20,8 @@ warn "Instalando dependencias..."
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
   curl wget libva2 libvdpau1 libpulse0 libx11-6 libxrandr2 libxcb1 libssl3 \
-  tigervnc-standalone-server tigervnc-common tightvncpasswd || true
+  dbus-x11 xfce4 xfce4-goodies \
+  tigervnc-standalone-server tigervnc-common tightvncpasswd
 ok "Dependencias instaladas"
 
 # VNC headless
