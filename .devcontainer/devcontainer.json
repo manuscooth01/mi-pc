@@ -5,6 +5,6 @@
   "features": {
     "ghcr.io/tailscale/codespace/tailscale": { "version": "latest" }
   },
-  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postCreateCommand": "bash .devcontainer/setup-gui.sh",
   "postStartCommand": "bash .devcontainer/start.sh"
 }
