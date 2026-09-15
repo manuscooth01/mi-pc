@@ -1,23 +1,10 @@
 {
-  "name": "Moonlight Server (Sunshine)",
-  "image": "mcr.microsoft.com/devcontainers/base:jammy",
+  "name": "cloud-desktop",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "runArgs": ["--device=/dev/net/tun", "--cap-add=NET_ADMIN"],
   "features": {
-    "ghcr.io/devcontainers/features/tailscale:1": {}
+    "ghcr.io/tailscale/codespace/tailscale": { "version": "latest" }
   },
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-azuretools.vscode-docker"
-      ]
-    }
-  },
-  "postCreateCommand": "bash .devcontainer/setup-gui.sh",
-  "forwardPorts": [47984, 47989, 47990, 48010],
-  "portsAttributes": {
-    "47984": { "label": "Sunshine RTSP", "onAutoForward": "notify", "visibility": "public" },
-    "47989": { "label": "Sunshine Web", "onAutoForward": "notify", "visibility": "public" },
-    "47990": { "label": "Sunshine Pair", "onAutoForward": "notify", "visibility": "public" },
-    "48010": { "label": "Sunshine Control", "onAutoForward": "notify", "visibility": "public" }
-  },
-  "remoteUser": "vscode"
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/start.sh"
 }
