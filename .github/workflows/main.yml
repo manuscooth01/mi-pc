@@ -5,7 +5,7 @@ jobs:
   build:
     name: Iniciando Sistema
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
     steps:
       - name: Instalar Tailscale y Sunshine
         run: |
@@ -33,6 +33,7 @@ jobs:
           SUNSHINE_PASSWORD: ${{ secrets.SUNSHINE_PASSWORD }}
         run: |
           $exe = "C:\Program Files\Sunshine\sunshine.exe"
+          $dir = Split-Path $exe -Parent
           if (-not (Test-Path $exe)) { Write-Host "ERROR: Sunshine no se encontró"; exit 1 }
 
           & $exe creds $env:SUNSHINE_USERNAME $env:SUNSHINE_PASSWORD
@@ -40,8 +41,11 @@ jobs:
 
           try {
             Start-Service -Name "SunshineService" -ErrorAction Stop
+            Write-Host "Sunshine arrancado como servicio."
           } catch {
-            Start-Process -FilePath $exe
+            Write-Host "No se pudo arrancar el servicio: $($_.Exception.Message)"
+            Write-Host "Iniciando el proceso directamente con working directory correcto..."
+            Start-Process -FilePath $exe -WorkingDirectory $dir
           }
           Start-Sleep -Seconds 10
         shell: pwsh
@@ -49,16 +53,22 @@ jobs:
       - name: Monitoreo y reinicio automático
         run: |
           $exe = "C:\Program Files\Sunshine\sunshine.exe"
+          $dir = Split-Path $exe -Parent
           $deadline = (Get-Date).AddMinutes(340)
           while ((Get-Date) -lt $deadline) {
             $svc = Get-Service -Name "SunshineService" -ErrorAction SilentlyContinue
             if ($svc -and $svc.Status -ne "Running") {
+              Write-Host "Servicio Sunshine caído. Reiniciando..."
               Start-Service -Name "SunshineService" -ErrorAction SilentlyContinue
             } elseif (-not $svc -and -not (Get-Process -Name "sunshine" -ErrorAction SilentlyContinue)) {
-              Start-Process -FilePath $exe
+              Write-Host "Proceso Sunshine caído. Reiniciando..."
+              Start-Process -FilePath $exe -WorkingDirectory $dir
+            } else {
+              Write-Host "Sunshine activo."
             }
             Start-Sleep -Seconds 60
           }
+          Write-Host "Tiempo límite alcanzado, saliendo del loop."
         shell: pwsh
 
       - name: Limpieza final
