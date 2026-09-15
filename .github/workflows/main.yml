@@ -1,16 +1,14 @@
-name: Windows Cloud PC - Moonlight/Sunshine
+name: Windows Cloud PC - RDP via Tailscale
 on:
   workflow_dispatch:
 jobs:
   build:
     name: Iniciando Sistema
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
     steps:
-      - name: Instalar Tailscale y Sunshine
-        run: |
-          winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements
-          winget install --id LizardByte.Sunshine -e --silent --accept-package-agreements --accept-source-agreements
+      - name: Instalar Tailscale
+        run: winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements
         shell: pwsh
 
       - name: Conectar Tailscale
@@ -27,44 +25,40 @@ jobs:
           & $ts ip -4
         shell: pwsh
 
-      - name: Configurar y arrancar Sunshine
+      - name: Crear usuario y activar RDP
         env:
-          SUNSHINE_USERNAME: ${{ secrets.SUNSHINE_USERNAME }}
-          SUNSHINE_PASSWORD: ${{ secrets.SUNSHINE_PASSWORD }}
+          RDP_USERNAME: ${{ secrets.RDP_USERNAME }}
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          $exe = "C:\Program Files\Sunshine\sunshine.exe"
-          $dir = Split-Path $exe -Parent
-          if (-not (Test-Path $exe)) { Write-Host "ERROR: Sunshine no se encontró"; exit 1 }
+          $securePass = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
 
-          & $exe creds $env:SUNSHINE_USERNAME $env:SUNSHINE_PASSWORD
-          Start-Sleep -Seconds 3
-
-          try {
-            Start-Service -Name "SunshineService" -ErrorAction Stop
-            Write-Host "Sunshine arrancado como servicio."
-          } catch {
-            Write-Host "No se pudo arrancar el servicio: $($_.Exception.Message)"
-            Write-Host "Iniciando el proceso directamente con working directory correcto..."
-            Start-Process -FilePath $exe -WorkingDirectory $dir
+          if (-not (Get-LocalUser -Name $env:RDP_USERNAME -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name $env:RDP_USERNAME -Password $securePass -PasswordNeverExpires -AccountNeverExpires
+          } else {
+            Set-LocalUser -Name $env:RDP_USERNAME -Password $securePass
           }
-          Start-Sleep -Seconds 10
+          Add-LocalGroupMember -Group "Administrators" -Member $env:RDP_USERNAME -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:RDP_USERNAME -ErrorAction SilentlyContinue
+
+          # Activar Escritorio Remoto
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-NetFirewallRule -DisplayGroup "Remote Desktop" -Profile Any -Enabled True
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
+          Write-Host "RDP activado para el usuario $($env:RDP_USERNAME)"
         shell: pwsh
 
-      - name: Monitoreo y reinicio automático
+      - name: Mantener el runner activo
         run: |
-          $exe = "C:\Program Files\Sunshine\sunshine.exe"
-          $dir = Split-Path $exe -Parent
           $deadline = (Get-Date).AddMinutes(340)
           while ((Get-Date) -lt $deadline) {
-            $svc = Get-Service -Name "SunshineService" -ErrorAction SilentlyContinue
+            $svc = Get-Service -Name TermService -ErrorAction SilentlyContinue
             if ($svc -and $svc.Status -ne "Running") {
-              Write-Host "Servicio Sunshine caído. Reiniciando..."
-              Start-Service -Name "SunshineService" -ErrorAction SilentlyContinue
-            } elseif (-not $svc -and -not (Get-Process -Name "sunshine" -ErrorAction SilentlyContinue)) {
-              Write-Host "Proceso Sunshine caído. Reiniciando..."
-              Start-Process -FilePath $exe -WorkingDirectory $dir
+              Write-Host "TermService caído. Reiniciando..."
+              Start-Service -Name TermService -ErrorAction SilentlyContinue
             } else {
-              Write-Host "Sunshine activo."
+              Write-Host "RDP activo."
             }
             Start-Sleep -Seconds 60
           }
