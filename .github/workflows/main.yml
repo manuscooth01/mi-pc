@@ -1,4 +1,4 @@
-name: Windows Cloud PC - AnyDesk
+name: Windows Cloud PC - Moonlight/Sunshine
 on:
   workflow_dispatch:
 jobs:
@@ -7,53 +7,58 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 3600
     steps:
-      - name: Instalar AnyDesk
-        run: choco install anydesk -y --force
+      - name: Instalar Tailscale y Sunshine
+        run: |
+          winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements
+          winget install --id LizardByte.Sunshine -e --silent --accept-package-agreements --accept-source-agreements
         shell: pwsh
 
-      - name: Configurar y arrancar AnyDesk
+      - name: Conectar Tailscale
         env:
-          ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
-          $exe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
-          if (-not (Test-Path $exe)) {
-            Write-Host "ERROR: AnyDesk no se encontró en $exe"
-            exit 1
-          }
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          if (-not (Test-Path $ts)) { Write-Host "ERROR: Tailscale no se encontró"; exit 1 }
 
-          # Arrancar el servicio primero (necesario antes de configurar)
-          Start-Process -FilePath $exe -ArgumentList "--start-service"
+          & $ts up --authkey=$env:TS_AUTHKEY --hostname="github-runner" --unattended
           Start-Sleep -Seconds 5
 
-          # AnyDesk espera la contraseña por STDIN, no como argumento
-          $env:ANYDESK_PASSWORD | & $exe --set-password
+          Write-Host "=== IP de Tailscale del runner ==="
+          & $ts ip -4
+        shell: pwsh
+
+      - name: Configurar y arrancar Sunshine
+        env:
+          SUNSHINE_USERNAME: ${{ secrets.SUNSHINE_USERNAME }}
+          SUNSHINE_PASSWORD: ${{ secrets.SUNSHINE_PASSWORD }}
+        run: |
+          $exe = "C:\Program Files\Sunshine\sunshine.exe"
+          if (-not (Test-Path $exe)) { Write-Host "ERROR: Sunshine no se encontró"; exit 1 }
+
+          & $exe creds $env:SUNSHINE_USERNAME $env:SUNSHINE_PASSWORD
           Start-Sleep -Seconds 3
 
-          # Arrancar AnyDesk
-          Start-Process -FilePath $exe
-          Start-Sleep -Seconds 15
-
-          # Mostrar el ID
-          Write-Host "=== AnyDesk ID ==="
-          $id = & $exe --get-id
-          Write-Host $id
+          try {
+            Start-Service -Name "SunshineService" -ErrorAction Stop
+          } catch {
+            Start-Process -FilePath $exe
+          }
+          Start-Sleep -Seconds 10
         shell: pwsh
 
       - name: Monitoreo y reinicio automático
         run: |
-          $exe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
-          $deadline = (Get-Date).AddMinutes(340)  # margen antes del timeout de 360
+          $exe = "C:\Program Files\Sunshine\sunshine.exe"
+          $deadline = (Get-Date).AddMinutes(340)
           while ((Get-Date) -lt $deadline) {
-            $p = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
-            if (-not $p) {
-              Write-Host "AnyDesk caído. Reiniciando..."
+            $svc = Get-Service -Name "SunshineService" -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -ne "Running") {
+              Start-Service -Name "SunshineService" -ErrorAction SilentlyContinue
+            } elseif (-not $svc -and -not (Get-Process -Name "sunshine" -ErrorAction SilentlyContinue)) {
               Start-Process -FilePath $exe
-            } else {
-              Write-Host "AnyDesk activo (PID $($p.Id))"
             }
             Start-Sleep -Seconds 60
           }
-          Write-Host "Tiempo límite alcanzado, saliendo del loop."
         shell: pwsh
 
       - name: Limpieza final
