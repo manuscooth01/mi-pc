@@ -8,8 +8,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Instalar AnyDesk
-        run: |
-          choco install anydesk -y --force
+        run: choco install anydesk -y --force
         shell: pwsh
 
       - name: Configurar y arrancar AnyDesk
@@ -20,18 +19,24 @@ jobs:
             exit 1
           }
 
-          # Contraseña de acceso desatendido (opcional, cámbiala)
+          # Contraseña de acceso desatendido (cámbiala)
           $pass = "MiClaveSegura123"
-          & $exe --set-password $pass | Out-Null
+          & $exe --set-password $pass 2>$null | Out-Null
+          $global:LASTEXITCODE = 0
           Start-Sleep -Seconds 5
 
           # Arrancar AnyDesk
           Start-Process -FilePath $exe
           Start-Sleep -Seconds 15
 
-          # Mostrar el ID para conectarse
+          # Mostrar el ID (AnyDesk devuelve exit 1 aunque funcione)
           Write-Host "=== AnyDesk ID ==="
-          & $exe --get-id
+          $id = & $exe --get-id 2>$null
+          Write-Host $id
+          $global:LASTEXITCODE = 0
+
+          # Forzar éxito del step
+          exit 0
         shell: pwsh
 
       - name: Monitoreo y reinicio automático
@@ -42,6 +47,8 @@ jobs:
             if (-not $p) {
               Write-Host "AnyDesk caído. Reiniciando..."
               Start-Process -FilePath $exe
+            } else {
+              Write-Host "AnyDesk activo (PID $($p.Id))"
             }
             Start-Sleep -Seconds 60
           }
