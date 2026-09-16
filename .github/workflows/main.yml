@@ -1,110 +1,271 @@
-name: RDP
+name: Apollo Moonlight Streaming
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  apollo-stream:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
+      # ─────────────────────────────────────────────
+      # 1. CONFIGURAR RDP (acceso de respaldo)
+      # ─────────────────────────────────────────────
+      - name: Configure RDP
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
+            -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+            -Name "UserAuthentication" -Value 0 -Force
 
-          # Remove any existing rule with the same name to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+          netsh advfirewall firewall delete rule name="RDP-Allow" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Allow" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Fixed Credentials
+      # ─────────────────────────────────────────────
+      # 2. CREAR USUARIO
+      # ─────────────────────────────────────────────
+      - name: Create User
         run: |
-          # Fixed credentials
-          $username = "Manuela"
-          $password = "Manu1234"
+          $u = "Manuela"
+          $p = "Manu1234"
+          $sp = ConvertTo-SecureString $p -AsPlainText -Force
 
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-          # Remove existing user if present
-          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-              Remove-LocalUser -Name $username
+          if (Get-LocalUser -Name $u -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name $u
           }
 
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires `
+          New-LocalUser -Name $u -Password $sp -AccountNeverExpires `
             -PasswordNeverExpires -UserMayNotChangePassword
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          Add-LocalGroupMember -Group "Administrators" -Member $u
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
 
-          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          Write-Host "User $u created."
 
-          if (-not (Get-LocalUser -Name $username)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
+      # ─────────────────────────────────────────────
+      # 3. INSTALAR TAILSCALE
+      # ─────────────────────────────────────────────
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $msi = "$env:TEMP\ts.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/quiet","/norestart" -Wait
+          Remove-Item $msi -Force
 
-      - name: Establish Tailscale Connection
+      - name: Connect Tailscale
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
-          # Wait for Tailscale to assign an IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=moonlight-$env:GITHUB_RUN_ID
 
-      - name: Maintain Connection
+          $ip = $null; $i = 0
+          while (-not $ip -and $i -lt 15) {
+              $ip = & $ts ip -4 2>$null
+              Start-Sleep 5; $i++
+          }
+          if (-not $ip) { Write-Error "No Tailscale IP"; exit 1 }
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+          Write-Host "Tailscale IP: $ip"
+
+      # ─────────────────────────────────────────────
+      # 4. INSTALAR ViGEmBus (GAMEPAD VIRTUAL)
+      # ─────────────────────────────────────────────
+      - name: Install ViGEmBus
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: Manuela"
-          Write-Host "Password: Manu1234"
-          Write-Host "==================`n"
-          
-          # Keep runner active indefinitely (or until manually cancelled)
+          $u = "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe"
+          $f = "$env:TEMP\vigem.exe"
+          Invoke-WebRequest -Uri $u -OutFile $f
+          Start-Process $f -ArgumentList "/exenoui","/qn","/norestart" -Wait
+          Remove-Item $f -Force
+          Write-Host "ViGEmBus installed."
+
+      # ─────────────────────────────────────────────
+      # 5. INSTALAR APOLLO
+      # ─────────────────────────────────────────────
+      - name: Install Apollo
+        run: |
+          winget install --id ClassicOldSong.Apollo --exact --silent `
+            --accept-package-agreements --accept-source-agreements `
+            --disable-interactivity
+          Write-Host "Apollo installed."
+
+      # ─────────────────────────────────────────────
+      # 6. CONFIGURAR APOLLO (MÁXIMO RENDIMIENTO CPU)
+      # ─────────────────────────────────────────────
+      - name: Configure Apollo
+        run: |
+          $cfgDir = "$env:ProgramFiles\Apollo\config"
+          if (-not (Test-Path $cfgDir)) {
+              $cfgDir = "$env:ProgramFiles\Sunshine\config"
+          }
+          if (-not (Test-Path $cfgDir)) {
+              New-Item -ItemType Directory -Path $cfgDir -Force
+          }
+          $cfg = Join-Path $cfgDir "sunshine.conf"
+
+          # Configuración AGRESIVA para codificación por SOFTWARE
+          # (los runners de GitHub NO tienen GPU dedicada)
+          @"
+# ── ENCODER: SOFTWARE (CPU) ──
+encoder = software
+
+# ── CAPTURA: DirectX Desktop Duplication ──
+capture = ddx
+
+# ── VIRTUAL DISPLAY (Apollo lo integra vía SudoVDA) ──
+headless_mode = enabled
+virtual_display = enabled
+
+# ── CODECS: H.264 primero (más rápido en CPU que HEVC/AV1) ──
+hevc_mode = 1
+av1_mode = 1
+
+# ── BITRATE ADAPTATIVO ──
+max_bitrate = 0
+
+# ── FPS: limitado para no saturar CPU ──
+fps = 30
+minimum_fps_target = 20
+
+# ── CALIDAD / LATENCIA ──
+qp = 28
+sw_preset = ultrafast
+sw_tune = zerolatency
+
+# ── HILOS DE CPU: mitad de núcleos para encoding ──
+min_threads = 8
+
+# ── AUDIO ──
+stream_audio = enabled
+
+# ── PANTALLA ──
+output_name = 0
+"@ | Out-File -FilePath $cfg -Encoding UTF8
+
+          # Credenciales Web UI
+          $exe = "$env:ProgramFiles\Apollo\apollo.exe"
+          if (-not (Test-Path $exe)) {
+              $exe = "$env:ProgramFiles\Sunshine\sunshine.exe"
+          }
+          if (Test-Path $exe) {
+              & $exe --creds Manuela Manu1234
+              Write-Host "Apollo creds set: Manuela / Manu1234"
+          }
+          Write-Host "Config written."
+
+      # ─────────────────────────────────────────────
+      # 7. OPTIMIZACIONES DE CPU PARA STREAMING
+      # ─────────────────────────────────────────────
+      - name: Apply CPU Optimizations
+        run: |
+          # Prioridad alta para el proceso de Apollo
+          $exe = "$env:ProgramFiles\Apollo\apollo.exe"
+          if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
+          if (Test-Path $exe) {
+              $proc = Get-Process -Name "apollo","sunshine" -ErrorAction SilentlyContinue
+              foreach ($p in $proc) {
+                  $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+              }
+          }
+
+          # Desactivar servicios innecesarios durante el streaming
+          $svcs = @("SysMain","WSearch","DiagTrack","dmwappushservice")
+          foreach ($s in $svcs) {
+              Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
+              Set-Service -Name $s -StartupType Disabled -ErrorAction SilentlyContinue
+          }
+
+          # Plan de energía: Alto rendimiento
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+
+          Write-Host "CPU optimizations applied."
+
+      # ─────────────────────────────────────────────
+      # 8. INICIAR APOLLO
+      # ─────────────────────────────────────────────
+      - name: Start Apollo
+        run: |
+          $svc = Get-Service -Name "*Apollo*" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $svc) {
+              $svc = Get-Service -Name "*Sunshine*" -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+          }
+          if ($svc) {
+              if ($svc.Status -ne 'Running') { Start-Service -Name $svc.Name }
+              Write-Host "Service $($svc.Name) running."
+          } else {
+              $exe = "$env:ProgramFiles\Apollo\apollo.exe"
+              if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
+              Start-Process -FilePath $exe -WindowStyle Hidden
+              Write-Host "Apollo started as process."
+          }
+
+      # ─────────────────────────────────────────────
+      # 9. ABRIR PUERTOS DE FIREWALL
+      # ─────────────────────────────────────────────
+      - name: Open Firewall Ports
+        run: |
+          $tcp = @(47984,47989,47990,48010)
+          $udp = @(47998,47999,48000,48002,48010)
+          foreach ($p in $tcp) {
+              New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound `
+                -Protocol TCP -LocalPort $p -Action Allow -ErrorAction SilentlyContinue
+          }
+          foreach ($p in $udp) {
+              New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound `
+                -Protocol UDP -LocalPort $p -Action Allow -ErrorAction SilentlyContinue
+          }
+          Write-Host "Firewall ports opened."
+
+      # ─────────────────────────────────────────────
+      # 10. VERIFICAR
+      # ─────────────────────────────────────────────
+      - name: Verify Services
+        run: |
+          Write-Host "Tailscale IP: $env:TS_IP"
+
+          $rdp = Test-NetConnection -ComputerName $env:TS_IP -Port 3389
+          if ($rdp.TcpTestSucceeded) {
+              Write-Host "✅ RDP OK"
+          } else {
+              Write-Warning "⚠️ RDP no responde"
+          }
+
+          Start-Sleep 15
+          try {
+              $r = Invoke-WebRequest -Uri "http://localhost:47990" `
+                -UseBasicParsing -TimeoutSec 10
+              Write-Host "✅ Apollo Web UI OK (status $($r.StatusCode))"
+          } catch {
+              Write-Warning "⚠️ Apollo Web UI no responde aún"
+          }
+
+      # ─────────────────────────────────────────────
+      # 11. MANTENER ACTIVO + MOSTRAR CREDENCIALES
+      # ─────────────────────────────────────────────
+      - name: Keep Alive
+        run: |
+          Write-Host ""
+          Write-Host "╔══════════════════════════════════════════╗"
+          Write-Host "║     MOONLIGHT - DATOS DE CONEXIÓN       ║"
+          Write-Host "╠══════════════════════════════════════════╣"
+          Write-Host "║  IP Tailscale: $env:TS_IP"
+          Write-Host "║  Web UI:       http://$env:TS_IP:47990"
+          Write-Host "║  Usuario Web:  Manuela"
+          Write-Host "║  Password Web: Manu1234"
+          Write-Host "║"
+          Write-Host "║  RDP Usuario:  Manuela"
+          Write-Host "║  RDP Password: Manu1234"
+          Write-Host "╚══════════════════════════════════════════╝"
+          Write-Host ""
+          Write-Host "Moonlight: Añade host manual con IP: $env:TS_IP"
+
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
+              Write-Host "[$(Get-Date)] Apollo activo - cancela el workflow para terminar"
+              Start-Sleep 300
           }
