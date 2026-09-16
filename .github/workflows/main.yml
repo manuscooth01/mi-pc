@@ -2,6 +2,11 @@ name: Apollo Moonlight
 
 on:
   workflow_dispatch:
+    inputs:
+      moonlight_pin:
+        description: 'PIN de 4 dígitos que muestra Moonlight (opcional, solo para Solución 1)'
+        required: false
+        default: ''
 
 jobs:
   stream:
@@ -34,25 +39,21 @@ jobs:
           Write-Host "Idioma, RDP y usuario listos."
 
       # ─────────────────────────────────────────────
-      # 2. CONFIGURAR RESOLUCIÓN 720p EN EL RUNNER
+      # 2. RESOLUCIÓN 720p (ALIVIA LA CPU)
       # ─────────────────────────────────────────────
-      - name: Configurar resolución de pantalla 720p
+      - name: Configurar resolución 720p
         shell: pwsh
         run: |
-          # Forzar resolución 1280x720 para aliviar la carga de codificación
-          $res = "1280 720"
-          $wmi = Get-WmiObject -Class Win32_VideoController | Select-Object -First 1
-          if ($wmi) {
-            try {
-              $wmi.SetVideoMode($res.Split()[0], $res.Split()[1], 32, 60)
-              Write-Host "Resolución establecida a 1280x720."
-            } catch {
-              Write-Warning "No se pudo cambiar la resolución por WMI, se usará la predeterminada."
-            }
+          try {
+            $wmi = Get-WmiObject -Class Win32_VideoController | Select-Object -First 1
+            $wmi.SetVideoMode(1280, 720, 32, 60)
+            Write-Host "Resolución 1280x720 establecida."
+          } catch {
+            Write-Warning "No se pudo cambiar la resolución, se usará la predeterminada."
           }
 
       # ─────────────────────────────────────────────
-      # 3. INSTALAR VISUAL C++ REDISTRIBUTABLE
+      # 3. VISUAL C++ REDISTRIBUTABLE
       # ─────────────────────────────────────────────
       - name: Instalar Visual C++ Redistributable
         shell: pwsh
@@ -65,9 +66,9 @@ jobs:
           Write-Host "Visual C++ Redistributable instalado."
 
       # ─────────────────────────────────────────────
-      # 4. DESCARGAR INSTALADORES EN PARALELO
+      # 4. DESCARGAS EN PARALELO
       # ─────────────────────────────────────────────
-      - name: Descargar instaladores en paralelo
+      - name: Descargar instaladores
         shell: pwsh
         run: |
           $job1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
@@ -78,7 +79,7 @@ jobs:
           Write-Host "Descargas completadas."
 
       # ─────────────────────────────────────────────
-      # 5. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
+      # 5. INSTALACIONES EN PARALELO
       # ─────────────────────────────────────────────
       - name: Instalar Tailscale y ViGEmBus
         shell: pwsh
@@ -90,7 +91,7 @@ jobs:
           Write-Host "Tailscale y ViGEmBus instalados."
 
       # ─────────────────────────────────────────────
-      # 6. CONECTAR TAILSCALE
+      # 6. TAILSCALE
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
@@ -115,21 +116,17 @@ jobs:
       # ─────────────────────────────────────────────
       # 8. LOCALIZAR EJECUTABLE
       # ─────────────────────────────────────────────
-      - name: Localizar ejecutable de Apollo
+      - name: Localizar ejecutable
         shell: pwsh
         run: |
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
-          if (-not (Test-Path $exe)) {
-            $exe = Get-ChildItem "$env:ProgramFiles\Apollo", "$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue |
-                   Select-Object -First 1 -ExpandProperty FullName
-          }
           if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
           echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
           Write-Host "Ejecutable: $exe"
 
       # ─────────────────────────────────────────────
-      # 9. CONFIGURAR APOLLO (OPTIMIZADO PARA CPU)
+      # 9. CONFIGURAR APOLLO (SIN PIN)
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -142,10 +139,13 @@ jobs:
           if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\Sunshine\config" }
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
 
-          # Configuración optimizada para encoder de software (libx264) en CPU
           @(
-            "# --- ENCODER: SOFTWARE (CPU) ---"
+            "# --- ENCODER (CPU) ---"
             "encoder = software"
+            "sw_preset = ultrafast"
+            "sw_tune = zerolatency"
+            "min_threads = 4"
+            "minimum_fps_target = 30"
             ""
             "# --- CAPTURA ---"
             "capture = ddx"
@@ -154,37 +154,25 @@ jobs:
             "hevc_mode = 1"
             "av1_mode = 1"
             ""
-            "# --- CALIDAD / LATENCIA ---"
-            "qp = 28"
-            "sw_preset = ultrafast"
-            "sw_tune = zerolatency"
-            ""
-            "# --- HILOS DE CPU (runner ~4 vCPU) ---"
-            "min_threads = 4"
-            ""
-            "# --- FPS OBJETIVO ---"
-            "minimum_fps_target = 30"
-            ""
             "# --- RED ---"
             "fec_percentage = 20"
+            ""
+            "# --- SIN PIN (EMPAREJAMIENTO AUTOMÁTICO) ---"
+            'pin = ""'
+            "always_require_pin = false"
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
 
           & $env:APOLLO_EXE --creds Manuela Manu1234
-          Write-Host "Configuración escrita."
+          Write-Host "Configuración escrita (sin PIN)."
 
       # ─────────────────────────────────────────────
-      # 10. CONFIGURAR FIREWALL
+      # 10. FIREWALL
       # ─────────────────────────────────────────────
       - name: Configurar firewall
         shell: pwsh
         run: |
-          Remove-NetFirewallRule -DisplayName "ApolloTCP47990" -EA SilentlyContinue
-          Remove-NetFirewallRule -DisplayName "ApolloUDP47990" -EA SilentlyContinue
-
-          New-NetFirewallRule -DisplayName "ApolloTCP47990" -Direction Inbound -Protocol TCP -LocalPort 47990 -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
-          New-NetFirewallRule -DisplayName "ApolloUDP47990" -Direction Inbound -Protocol UDP -LocalPort 47990 -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
-
-          foreach ($p in @(47984, 47989, 48010)) {
+          $ports = @(47984, 47989, 47990, 48010)
+          foreach ($p in $ports) {
             Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
             New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
@@ -200,11 +188,9 @@ jobs:
       - name: Optimizar CPU
         shell: pwsh
         run: |
-          foreach ($s in @("SysMain", "WSearch", "DiagTrack")) {
-            Stop-Service $s -Force -EA SilentlyContinue
-          }
+          foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          Write-Host "Optimizaciones de CPU aplicadas."
+          Write-Host "Optimizaciones aplicadas."
 
       # ─────────────────────────────────────────────
       # 12. INICIAR APOLLO
@@ -212,69 +198,55 @@ jobs:
       - name: Iniciar Apollo
         shell: pwsh
         run: |
-          Get-Process "*apollo*", "*sunshine*" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-          Get-Service "*Apollo*", "*Sunshine*" -EA SilentlyContinue | Stop-Service -Force -EA SilentlyContinue
-          Start-Sleep 3
-
           $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
           if (-not $svc) { $svc = Get-Service "*Sunshine*" -EA SilentlyContinue | Select-Object -First 1 }
-          if ($svc) {
-            Start-Service $svc.Name
-            Write-Host "Servicio $($svc.Name) iniciado."
-          } else {
-            Start-Process $env:APOLLO_EXE -WindowStyle Hidden
-            Write-Host "Apollo iniciado como proceso."
-          }
+          if ($svc) { Start-Service $svc.Name } else { Start-Process $env:APOLLO_EXE -WindowStyle Hidden }
 
           $ok = $false
           for ($i = 0; $i -lt 18; $i++) {
             Start-Sleep 5
-            if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) {
-              $ok = $true
-              Write-Host "Puerto 47990 activo tras $($i * 5) segundos."
-              break
-            }
-            Write-Host "Esperando Web UI... ($($i * 5)s)"
+            if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) { $ok = $true; break }
           }
-          if (-not $ok) { Write-Warning "El puerto 47990 nunca se abrió." }
+          if (-not $ok) { Write-Warning "Puerto 47990 nunca se abrió." } else { Write-Host "Puerto 47990 activo." }
 
       # ─────────────────────────────────────────────
-      # 13. VERIFICAR Y MOSTRAR DATOS
+      # 13. EMPAREJAMIENTO POR API (SOLUCIÓN 1 - OPCIONAL)
       # ─────────────────────────────────────────────
-      - name: Verificar y mostrar datos
+      - name: Emparejar Moonlight vía API (si se proporcionó PIN)
+        if: ${{ github.event.inputs.moonlight_pin != '' }}
         shell: pwsh
         run: |
-          # Arreglado: usar ${env:TS_IP} en lugar de $env:TS_IP
-          $ok = $false
-          for ($i = 0; $i -lt 12; $i++) {
-            try {
-              $r = Invoke-WebRequest "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 5
-              if ($r.StatusCode -eq 200) { $ok = $true; break }
-            } catch { Start-Sleep 5 }
+          $pin = "${{ github.event.inputs.moonlight_pin }}"
+          $clientName = "Moonlight-Celular"
+          $body = @{ pin = $pin; name = $clientName } | ConvertTo-Json
+          try {
+            $r = Invoke-RestMethod -Uri "https://localhost:47990/api/pin" -Method Post -SkipCertificateCheck -Authentication Basic -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) -Body $body -ContentType "application/json"
+            Write-Host "PIN enviado vía API. Respuesta: $r"
+          } catch {
+            Write-Warning "Fallo al enviar PIN vía API: $_"
           }
-          if ($ok) { Write-Host "Apollo Web UI: OK" }
-          else { Write-Warning "Web UI aún no responde tras 60s" }
-
-          Write-Host ""
-          Write-Host "========================================="
-          Write-Host "  DATOS DE CONEXION - MOONLIGHT"
-          Write-Host "========================================="
-          Write-Host "  IP Tailscale : $env:TS_IP"
-          Write-Host "  Web UI       : https://${env:TS_IP}:47990"
-          Write-Host "  Usuario      : Manuela"
-          Write-Host "  Password     : Manu1234"
-          Write-Host "  RDP          : ${env:TS_IP}:3389"
-          Write-Host "  Config       : 720p / CPU ultrafast / 30fps target"
-          Write-Host "========================================="
-          Write-Host ""
-          Write-Host "MOONLIGHT: Añade host manual con IP $env:TS_IP"
-          Write-Host "WEB UI: https://${env:TS_IP}:47990 (acepta certificado autofirmado)"
-          Write-Host ""
-          Write-Host "IMPORTANTE: NO canceles el workflow mientras lo uses."
-          Write-Host ""
 
       # ─────────────────────────────────────────────
-      # 14. MANTENER VIVO
+      # 14. MOSTRAR DATOS
+      # ─────────────────────────────────────────────
+      - name: Mostrar datos de conexión
+        shell: pwsh
+        run: |
+          Write-Host "========================================="
+          Write-Host "  IP Tailscale : $env:TS_IP"
+          Write-Host "  RDP          : ${env:TS_IP}:3389"
+          Write-Host "  Usuario RDP  : Manuela"
+          Write-Host "  Password RDP : Manu1234"
+          Write-Host "========================================="
+          Write-Host "  MODO SIN PIN ACTIVADO"
+          Write-Host "  Moonlight se emparejará automáticamente."
+          Write-Host "  Solo añade la IP y conecta."
+          Write-Host "========================================="
+          Write-Host "  Si usaste la Solución 1, el PIN ya fue enviado."
+          Write-Host "========================================="
+
+      # ─────────────────────────────────────────────
+      # 15. KEEP ALIVE
       # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
