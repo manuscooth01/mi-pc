@@ -34,7 +34,25 @@ jobs:
           Write-Host "Idioma, RDP y usuario listos."
 
       # ─────────────────────────────────────────────
-      # 2. INSTALAR VISUAL C++ REDISTRIBUTABLE
+      # 2. CONFIGURAR RESOLUCIÓN 720p EN EL RUNNER
+      # ─────────────────────────────────────────────
+      - name: Configurar resolución de pantalla 720p
+        shell: pwsh
+        run: |
+          # Forzar resolución 1280x720 para aliviar la carga de codificación
+          $res = "1280 720"
+          $wmi = Get-WmiObject -Class Win32_VideoController | Select-Object -First 1
+          if ($wmi) {
+            try {
+              $wmi.SetVideoMode($res.Split()[0], $res.Split()[1], 32, 60)
+              Write-Host "Resolución establecida a 1280x720."
+            } catch {
+              Write-Warning "No se pudo cambiar la resolución por WMI, se usará la predeterminada."
+            }
+          }
+
+      # ─────────────────────────────────────────────
+      # 3. INSTALAR VISUAL C++ REDISTRIBUTABLE
       # ─────────────────────────────────────────────
       - name: Instalar Visual C++ Redistributable
         shell: pwsh
@@ -47,7 +65,7 @@ jobs:
           Write-Host "Visual C++ Redistributable instalado."
 
       # ─────────────────────────────────────────────
-      # 3. DESCARGAR INSTALADORES EN PARALELO
+      # 4. DESCARGAR INSTALADORES EN PARALELO
       # ─────────────────────────────────────────────
       - name: Descargar instaladores en paralelo
         shell: pwsh
@@ -58,10 +76,9 @@ jobs:
           Receive-Job $job1, $job2
           Remove-Job $job1, $job2 -Force
           Write-Host "Descargas completadas."
-          Get-Item "$env:TEMP\ts.msi", "$env:TEMP\vigem.exe" | Select-Object Name, Length
 
       # ─────────────────────────────────────────────
-      # 4. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
+      # 5. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
       # ─────────────────────────────────────────────
       - name: Instalar Tailscale y ViGEmBus
         shell: pwsh
@@ -73,7 +90,7 @@ jobs:
           Write-Host "Tailscale y ViGEmBus instalados."
 
       # ─────────────────────────────────────────────
-      # 5. CONECTAR TAILSCALE
+      # 6. CONECTAR TAILSCALE
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
@@ -87,7 +104,7 @@ jobs:
           Write-Host "IP Tailscale: $ip"
 
       # ─────────────────────────────────────────────
-      # 6. INSTALAR APOLLO
+      # 7. INSTALAR APOLLO
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
@@ -96,7 +113,7 @@ jobs:
           Write-Host "Apollo instalado."
 
       # ─────────────────────────────────────────────
-      # 7. LOCALIZAR EJECUTABLE
+      # 8. LOCALIZAR EJECUTABLE
       # ─────────────────────────────────────────────
       - name: Localizar ejecutable de Apollo
         shell: pwsh
@@ -112,7 +129,7 @@ jobs:
           Write-Host "Ejecutable: $exe"
 
       # ─────────────────────────────────────────────
-      # 8. CONFIGURAR APOLLO
+      # 9. CONFIGURAR APOLLO (OPTIMIZADO PARA CPU)
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -124,21 +141,39 @@ jobs:
           $dir = "$env:ProgramFiles\Apollo\config"
           if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\Sunshine\config" }
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
+
+          # Configuración optimizada para encoder de software (libx264) en CPU
           @(
+            "# --- ENCODER: SOFTWARE (CPU) ---"
             "encoder = software"
+            ""
+            "# --- CAPTURA ---"
             "capture = ddx"
+            ""
+            "# --- CODECS ---"
             "hevc_mode = 1"
             "av1_mode = 1"
+            ""
+            "# --- CALIDAD / LATENCIA ---"
             "qp = 28"
             "sw_preset = ultrafast"
             "sw_tune = zerolatency"
-            "min_threads = 8"
+            ""
+            "# --- HILOS DE CPU (runner ~4 vCPU) ---"
+            "min_threads = 4"
+            ""
+            "# --- FPS OBJETIVO ---"
+            "minimum_fps_target = 30"
+            ""
+            "# --- RED ---"
+            "fec_percentage = 20"
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
+
           & $env:APOLLO_EXE --creds Manuela Manu1234
           Write-Host "Configuración escrita."
 
       # ─────────────────────────────────────────────
-      # 9. CONFIGURAR FIREWALL
+      # 10. CONFIGURAR FIREWALL
       # ─────────────────────────────────────────────
       - name: Configurar firewall
         shell: pwsh
@@ -160,7 +195,7 @@ jobs:
           Write-Host "Firewall configurado."
 
       # ─────────────────────────────────────────────
-      # 10. OPTIMIZAR CPU
+      # 11. OPTIMIZAR CPU
       # ─────────────────────────────────────────────
       - name: Optimizar CPU
         shell: pwsh
@@ -172,7 +207,7 @@ jobs:
           Write-Host "Optimizaciones de CPU aplicadas."
 
       # ─────────────────────────────────────────────
-      # 11. INICIAR APOLLO
+      # 12. INICIAR APOLLO
       # ─────────────────────────────────────────────
       - name: Iniciar Apollo
         shell: pwsh
@@ -204,57 +239,38 @@ jobs:
           if (-not $ok) { Write-Warning "El puerto 47990 nunca se abrió." }
 
       # ─────────────────────────────────────────────
-      # 12. DIAGNÓSTICO DE CONECTIVIDAD
+      # 13. VERIFICAR Y MOSTRAR DATOS
       # ─────────────────────────────────────────────
-      - name: Diagnóstico de conectividad
+      - name: Verificar y mostrar datos
         shell: pwsh
         run: |
-          Write-Host "--- Prueba local ---"
-          try {
-            $r = Invoke-WebRequest "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 5
-            Write-Host "Conexion local: OK ($($r.StatusCode))"
-          } catch {
-            Write-Warning "Conexion local fallo: $_"
+          # Arreglado: usar ${env:TS_IP} en lugar de $env:TS_IP
+          $ok = $false
+          for ($i = 0; $i -lt 12; $i++) {
+            try {
+              $r = Invoke-WebRequest "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { Start-Sleep 5 }
           }
+          if ($ok) { Write-Host "Apollo Web UI: OK" }
+          else { Write-Warning "Web UI aún no responde tras 60s" }
 
-          Write-Host "--- Prueba via Tailscale IP ---"
-          try {
-            $r = Invoke-WebRequest "https://$env:TS_IP:47990" -SkipCertificateCheck -TimeoutSec 5
-            Write-Host "Conexion via Tailscale: OK ($($r.StatusCode))"
-          } catch {
-            Write-Warning "Conexion via Tailscale fallo: $_"
-          }
-
-          Write-Host "--- Estado del puerto ---"
-          Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue | Format-Table LocalAddress, LocalPort, State, OwningProcess -AutoSize
-
-      # ─────────────────────────────────────────────
-      # 13. MOSTRAR DATOS DE CONEXIÓN
-      # ─────────────────────────────────────────────
-      - name: Mostrar datos de conexión
-        shell: pwsh
-        run: |
           Write-Host ""
           Write-Host "========================================="
-          Write-Host "  DATOS DE CONEXION"
+          Write-Host "  DATOS DE CONEXION - MOONLIGHT"
           Write-Host "========================================="
           Write-Host "  IP Tailscale : $env:TS_IP"
           Write-Host "  Web UI       : https://${env:TS_IP}:47990"
           Write-Host "  Usuario      : Manuela"
           Write-Host "  Password     : Manu1234"
           Write-Host "  RDP          : ${env:TS_IP}:3389"
-          Write-Host "  Idioma       : Espanol (Venezuela)"
+          Write-Host "  Config       : 720p / CPU ultrafast / 30fps target"
           Write-Host "========================================="
           Write-Host ""
           Write-Host "MOONLIGHT: Añade host manual con IP $env:TS_IP"
+          Write-Host "WEB UI: https://${env:TS_IP}:47990 (acepta certificado autofirmado)"
           Write-Host ""
-          Write-Host "WEB UI: Abre en el navegador del movil:"
-          Write-Host "  https://${env:TS_IP}:47990"
-          Write-Host "  Acepta el aviso de certificado autofirmado."
-          Write-Host "  Usuario: Manuela / Password: Manu1234"
-          Write-Host "  Ahi veras el PIN que Moonlight te pida."
-          Write-Host ""
-          Write-Host "IMPORTANTE: NO canceles este workflow mientras lo uses."
+          Write-Host "IMPORTANTE: NO canceles el workflow mientras lo uses."
           Write-Host ""
 
       # ─────────────────────────────────────────────
