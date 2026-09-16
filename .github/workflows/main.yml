@@ -2,11 +2,6 @@ name: Apollo Moonlight
 
 on:
   workflow_dispatch:
-    inputs:
-      moonlight_pin:
-        description: 'PIN de 4 dígitos que muestra Moonlight (opcional, solo para Solución 1)'
-        required: false
-        default: ''
 
 jobs:
   stream:
@@ -39,7 +34,7 @@ jobs:
           Write-Host "Idioma, RDP y usuario listos."
 
       # ─────────────────────────────────────────────
-      # 2. RESOLUCIÓN 720p (ALIVIA LA CPU)
+      # 2. RESOLUCIÓN 720p
       # ─────────────────────────────────────────────
       - name: Configurar resolución 720p
         shell: pwsh
@@ -91,13 +86,14 @@ jobs:
           Write-Host "Tailscale y ViGEmBus instalados."
 
       # ─────────────────────────────────────────────
-      # 6. TAILSCALE
+      # 6. TAILSCALE (CON HOSTNAME FIJO)
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
         run: |
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ml-$env:GITHUB_RUN_ID
+          # Hostname fijo para mantener la misma IP siempre
+          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=moonlight-venezuela
           $ip = $null; $i = 0
           while (-not $ip -and $i -lt 15) { $ip = & $ts ip -4 2>$null; Start-Sleep 3; $i++ }
           if (-not $ip) { Write-Error "Sin IP Tailscale"; exit 1 }
@@ -210,24 +206,7 @@ jobs:
           if (-not $ok) { Write-Warning "Puerto 47990 nunca se abrió." } else { Write-Host "Puerto 47990 activo." }
 
       # ─────────────────────────────────────────────
-      # 13. EMPAREJAMIENTO POR API (SOLUCIÓN 1 - OPCIONAL)
-      # ─────────────────────────────────────────────
-      - name: Emparejar Moonlight vía API (si se proporcionó PIN)
-        if: ${{ github.event.inputs.moonlight_pin != '' }}
-        shell: pwsh
-        run: |
-          $pin = "${{ github.event.inputs.moonlight_pin }}"
-          $clientName = "Moonlight-Celular"
-          $body = @{ pin = $pin; name = $clientName } | ConvertTo-Json
-          try {
-            $r = Invoke-RestMethod -Uri "https://localhost:47990/api/pin" -Method Post -SkipCertificateCheck -Authentication Basic -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) -Body $body -ContentType "application/json"
-            Write-Host "PIN enviado vía API. Respuesta: $r"
-          } catch {
-            Write-Warning "Fallo al enviar PIN vía API: $_"
-          }
-
-      # ─────────────────────────────────────────────
-      # 14. MOSTRAR DATOS
+      # 13. MOSTRAR DATOS
       # ─────────────────────────────────────────────
       - name: Mostrar datos de conexión
         shell: pwsh
@@ -242,11 +221,9 @@ jobs:
           Write-Host "  Moonlight se emparejará automáticamente."
           Write-Host "  Solo añade la IP y conecta."
           Write-Host "========================================="
-          Write-Host "  Si usaste la Solución 1, el PIN ya fue enviado."
-          Write-Host "========================================="
 
       # ─────────────────────────────────────────────
-      # 15. KEEP ALIVE
+      # 14. KEEP ALIVE
       # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
