@@ -1,236 +1,176 @@
-name: Apollo Moonlight
+name: PC Potente en la Nube (RDP + Tailscale)
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
-
 jobs:
-  stream:
+  rdp-machine:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configurar idioma, RDP y usuario
+      # ─────────────────────────────────────────────
+      # 1. HABILITAR RDP Y DESACTIVAR NLA
+      # ─────────────────────────────────────────────
+      - name: Habilitar Escritorio Remoto
         shell: pwsh
         run: |
-          Set-WinSystemLocale -SystemLocale es-VE
-          Set-WinUILanguageOverride -Language es-VE
-          Set-WinUserLanguageList es-VE -Force
-          Set-Culture es-VE
-          Set-TimeZone -Id "Venezuela Standard Time"
+          # Permitir conexiones RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          # Desactivar autenticación a nivel de red (NLA) para permitir conexión desde cualquier cliente
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
-          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0 -Force
-          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' UserAuthentication 0 -Force
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389 | Out-Null
+          # Abrir puerto 3389 en el firewall
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 | Out-Null
           Restart-Service TermService -Force
+          Write-Host "RDP habilitado correctamente."
 
-          $sp = ConvertTo-SecureString "Manu1234" -AsPlainText -Force
-          if (Get-LocalUser Manuela -EA SilentlyContinue) { Remove-LocalUser Manuela }
-          New-LocalUser Manuela -Password $sp -AccountNeverExpires -PasswordNeverExpires
-          Add-LocalGroupMember Administrators Manuela
-          Add-LocalGroupMember "Remote Desktop Users" Manuela
-          Write-Host "Configuración inicial lista."
-
-      - name: Instalar dependencias
+      # ─────────────────────────────────────────────
+      # 2. CREAR USUARIO PERSONALIZADO (OPCIONAL)
+      # ─────────────────────────────────────────────
+      - name: Crear usuario personalizado
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$env:TEMP\vc.exe"
-          Start-Process "$env:TEMP\vc.exe" -ArgumentList "/install", "/quiet", "/norestart" -Wait
+          $user = "Manuela"
+          $pass = "Manu1234"
+          $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name $user
+          }
+          New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $user
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
+          Write-Host "Usuario $user creado con contraseña $pass"
 
-          $j1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
-          $j2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
-          Wait-Job $j1, $j2 | Out-Null
-          Receive-Job $j1, $j2; Remove-Job $j1, $j2
-
-          $j1 = Start-Job { Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait }
-          $j2 = Start-Job { Start-Process "$env:TEMP\vigem.exe" "/exenoui /qn /norestart" -Wait }
-          Wait-Job $j1, $j2 | Out-Null
-          Remove-Job $j1, $j2
-          Write-Host "Dependencias instaladas."
-
-      - name: Conectar Tailscale
+      # ─────────────────────────────────────────────
+      # 3. INSTALAR TAILSCALE Y CONECTAR
+      # ─────────────────────────────────────────────
+      - name: Instalar y conectar Tailscale
         shell: pwsh
         run: |
-          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=moonlight-venezuela
-          $ip = $null; $i = 0
-          while (-not $ip -and $i -lt 15) { $ip = & $ts ip -4 2>$null; Start-Sleep 3; $i++ }
-          if (-not $ip) { Write-Error "Sin IP Tailscale"; exit 1 }
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $tsMsi = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $tsMsi
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$tsMsi`"", "/quiet", "/norestart" -Wait
+          Remove-Item $tsMsi -Force
+
+          $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          # Hostname fijo para mantener la misma IP en cada ejecución
+          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=pc-potente-github
+
+          # Esperar a que se asigne la IP
+          $ip = $null
+          $retries = 0
+          while (-not $ip -and $retries -lt 15) {
+            $ip = & $tsExe ip -4 2>$null
+            Start-Sleep 3
+            $retries++
+          }
+          if (-not $ip) { Write-Error "No se pudo obtener la IP de Tailscale"; exit 1 }
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
-          Write-Host "IP Tailscale: $ip"
+          Write-Host "IP Tailscale asignada: $ip"
 
-      - name: Instalar Apollo
+      # ─────────────────────────────────────────────
+      # 4. OPTIMIZACIONES DE RDP (60 FPS + ACELERACIÓN)
+      # ─────────────────────────────────────────────
+      - name: Aplicar optimizaciones de RDP
         shell: pwsh
         run: |
-          winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-          $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
-          if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
-          if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
-          echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
+          # --- Habilitar transporte UDP y H.264 (mejor rendimiento) ---
+          $tsPolicy = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+          if (-not (Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force | Out-Null }
 
-      - name: Configurar Apollo
+          # Usar UDP y TCP (UDP para baja latencia, TCP como respaldo)
+          Set-ItemProperty -Path $tsPolicy -Name "SelectTransport" -Value 0 -Type DWord -Force
+          # Preferir codificación por hardware H.264
+          Set-ItemProperty -Path $tsPolicy -Name "AVCHardwareEncodePreferred" -Value 1 -Type DWord -Force
+          # Modo de color AVC 444 (máxima calidad)
+          Set-ItemProperty -Path $tsPolicy -Name "AVC444Mode" -Value 2 -Type DWord -Force
+
+          # --- Desbloquear 60 FPS (DWMFRAMEINTERVAL) ---
+          $dwmPath = "HKLM:\SOFTWARE\Microsoft\Windows\Dwm"
+          Set-ItemProperty -Path $dwmPath -Name "DWMFRAMEINTERVAL" -Value 0 -Type DWord -Force
+
+          # --- Optimizaciones de red y sistema ---
+          # Reducir la latencia de multimedia
+          $sysProfile = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+          Set-ItemProperty -Path $sysProfile -Name "SystemResponsiveness" -Value 0 -Type DWord -Force
+
+          # Deshabilitar control de flujo para RDP
+          $winStations = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
+          Set-ItemProperty -Path $winStations -Name "FlowControlDisplayBandwidth" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $winStations -Name "FlowControlChannelBandwidth" -Value 0 -Type DWord -Force
+
+          # --- Habilitar RDP Multipath (mayor estabilidad) ---
+          $rdpCloud = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\RdpCloudStackSettings"
+          if (-not (Test-Path $rdpCloud)) { New-Item -Path $rdpCloud -Force | Out-Null }
+          Set-ItemProperty -Path $rdpCloud -Name "SmilesV3ActivationThreshold" -Value 100 -Type DWord -Force
+
+          # --- Optimizar la pila de red de Windows ---
+          # Deshabilitar throttling de red
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex" -Name "NetworkThrottlingIndex" -Value 0xffffffff -Type DWord -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Optimizaciones de RDP aplicadas (60 FPS, H.264, Multipath)."
+
+      # ─────────────────────────────────────────────
+      # 5. ABRIR PUERTOS ADICIONALES PARA RDP MULTIPATH
+      # ─────────────────────────────────────────────
+      - name: Configurar firewall para RDP Multipath
         shell: pwsh
         run: |
-          Get-Service "*Apollo*", "*Sunshine*" -EA SilentlyContinue | Stop-Service -Force -EA SilentlyContinue
-          Get-Process "*apollo*", "*sunshine*" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-          Start-Sleep 3
-
-          $dir = "$env:ProgramFiles\Apollo\config"
-          if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
-
-          # --- Escribir sunshine.conf ---
-          @(
-            "encoder = software"
-            "sw_preset = ultrafast"
-            "sw_tune = zerolatency"
-            "min_threads = 4"
-            "minimum_fps_target = 30"
-            "capture = ddx"
-            "hevc_mode = 1"
-            "av1_mode = 1"
-            "fec_percentage = 20"
-          ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
-
-          # --- Escribir sunshine_state.json directamente ---
-          $stateFile = Join-Path $dir "sunshine_state.json"
-          $stateJson = @{
-            "username" = "Manuela"
-            "password" = "Manu1234"
-            "salt" = "abcdef0123456789"
-          } | ConvertTo-Json
-          $stateJson | Out-File "$stateFile" -Encoding UTF8
-
-          Write-Host "Configuración y estado de Apollo escritos."
-
-      - name: Configurar firewall
-        shell: pwsh
-        run: |
-          foreach ($p in @(47984, 47989, 47990, 48010)) {
-            Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
-            New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
+          # Puertos UDP para RDP Shortpath y Multipath
+          $udpPorts = @(3390, 3478, 3479)
+          foreach ($port in $udpPorts) {
+            netsh advfirewall firewall add rule name="RDP-UDP-$port" dir=in action=allow protocol=UDP localport=$port | Out-Null
           }
-          foreach ($p in @(47998, 47999, 48000, 48002, 48010)) {
-            Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
-            New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
-          }
-          foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          Write-Host "Firewall y optimizaciones aplicadas."
+          Write-Host "Puertos UDP abiertos para RDP Multipath."
 
-      - name: Iniciar Apollo
+      # ─────────────────────────────────────────────
+      # 6. REINICIAR SERVICIO RDP PARA APLICAR CAMBIOS
+      # ─────────────────────────────────────────────
+      - name: Reiniciar servicio de Escritorio Remoto
         shell: pwsh
         run: |
-          $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
-          if ($svc) { Start-Service $svc.Name } else { Start-Process $env:APOLLO_EXE -WindowStyle Hidden }
+          Restart-Service TermService -Force
+          Write-Host "Servicio de Escritorio Remoto reiniciado."
 
-          $ok = $false
-          for ($i = 0; $i -lt 18; $i++) {
-            Start-Sleep 5
-            if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) { $ok = $true; break }
-          }
-          if (-not $ok) { Write-Error "El puerto 47990 nunca se abrió."; exit 1 }
-          Write-Host "Apollo activo."
-
-      - name: Crear Issue para el PIN
+      # ─────────────────────────────────────────────
+      # 7. MOSTRAR DATOS DE CONEXIÓN Y MANTENER ACTIVO
+      # ─────────────────────────────────────────────
+      - name: Mostrar datos y mantener PC activa
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $title = "Moonlight PIN - $env:GITHUB_RUN_ID"
-          $body = "## Servidor Apollo listo`n`n" +
-                  "**IP Tailscale:** ``$env:TS_IP```n" +
-                  "**RDP:** ``${env:TS_IP}:3389`` (Usuario: Manuela / Password: Manu1234)`n`n" +
-                  "### Como emparejar Moonlight`n`n" +
-                  "1. Abre Moonlight en tu celular`n" +
-                  "2. Añade un host manual con la IP: ``$env:TS_IP```n" +
-                  "3. Moonlight te mostrará un PIN de 4 dígitos`n" +
-                  "4. **Comenta este Issue con el PIN (solo el número)**`n" +
-                  "5. El servidor lo detectará y emparejará automáticamente`n" +
-                  "6. Este Issue se cerrará solo cuando el emparejamiento termine`n`n" +
-                  "El servidor expira en 1 hora."
-
-          $issueJson = @{ title = $title; body = $body } | ConvertTo-Json
-          $issue = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues" `
-            -Method Post `
-            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" } `
-            -Body $issueJson `
-            -ContentType "application/json"
-
-          echo "ISSUE_NUMBER=$($issue.number)" >> $env:GITHUB_ENV
-          Write-Host "Issue #$($issue.number) creado."
-
-      - name: Esperar PIN y emparejar
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          Write-Host ""
+          Write-Host "========================================="
+          Write-Host "   PC POTENTE EN LA NUBE - LISTA"
           Write-Host "========================================="
           Write-Host "  IP Tailscale : $env:TS_IP"
-          Write-Host "  Issue #$env:ISSUE_NUMBER"
+          Write-Host "  Usuario       : Manuela"
+          Write-Host "  Contraseña    : Manu1234"
+          Write-Host "  Usuario admin : runneradmin (por defecto)"
+          Write-Host "  RDP           : $env:TS_IP:3389"
           Write-Host "========================================="
-          Write-Host "Añade la IP en Moonlight y comenta el PIN en el Issue."
+          Write-Host ""
+          Write-Host "INSTRUCCIONES PARA CONECTARTE:"
+          Write-Host "1. Abre Windows App en tu celular."
+          Write-Host "2. Añade una PC con la IP: $env:TS_IP"
+          Write-Host "3. Usa el usuario: Manuela  |  Contraseña: Manu1234"
+          Write-Host "4. ¡Disfruta de tu PC potente!"
+          Write-Host ""
+          Write-Host "IMPORTANTE: No canceles este workflow o la PC se apagará."
+          Write-Host "La PC se mantendrá activa durante 6 horas (límite de GitHub)."
+          Write-Host ""
 
-          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
-          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER/comments"
-
-          # --- Basic auth manual y robusto para Apollo (esto arregla el 401) ---
-          $pair = "Manuela:Manu1234"
-          $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
-          $apolloAuth = "Basic $base64"
-
-          $pinEnviado = $false
-          $procesados = @()
-          $deadline = (Get-Date).AddMinutes(30)
-
-          while (-not $pinEnviado -and (Get-Date) -lt $deadline) {
-            Start-Sleep 20
-            try {
-              $comments = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
-              foreach ($c in $comments) {
-                $cid = $c.id
-                if ($procesados -contains $cid) { continue }
-                $body = $c.body.Trim()
-                if ($body -match '^\d{4}$') {
-                  $procesados += $cid
-                  Write-Host "PIN detectado: $body"
-                  $payload = @{ pin = $body; name = "Moonlight-VE" } | ConvertTo-Json
-                  try {
-                    $resp = Invoke-RestMethod -Uri "https://localhost:47990/api/pin" `
-                      -Method Post `
-                      -SkipCertificateCheck `
-                      -Headers @{ Authorization = $apolloAuth } `
-                      -Body $payload `
-                      -ContentType "application/json"
-                    Write-Host "PIN enviado a Apollo. Respuesta: $resp"
-                    $pinEnviado = $true
-
-                    $confirm = @{ body = "PIN recibido y enviado a Apollo. Moonlight deberia estar emparejado." } | ConvertTo-Json
-                    Invoke-RestMethod -Uri $url -Headers $headers -Method Post -Body $confirm -ContentType "application/json" | Out-Null
-                    Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER" `
-                      -Headers $headers -Method Patch `
-                      -Body (@{ state = "closed" } | ConvertTo-Json) -ContentType "application/json" | Out-Null
-                    break
-                  } catch {
-                    Write-Warning "Fallo al enviar PIN: $_"
-                  }
-                }
-              }
-            } catch {
-              Write-Warning "Error consultando comentarios: $_"
-            }
-          }
-
-          if (-not $pinEnviado) {
-            Write-Warning "No se recibio PIN en 30 minutos."
-          }
-
-      - name: Keep alive
-        shell: pwsh
-        run: |
+          # Bucle para mantener el runner activo (máximo 6 horas)
+          $startTime = Get-Date
+          $maxHours = 6
           while ($true) {
-            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow"
+            $elapsed = (Get-Date) - $startTime
+            if ($elapsed.TotalHours -ge $maxHours) {
+              Write-Host "Se alcanzó el límite de 6 horas. Cerrando sesión..."
+              break
+            }
+            Write-Host "[$(Get-Date)] PC activa - Tiempo transcurrido: $([math]::Round($elapsed.TotalMinutes, 1)) minutos"
             Start-Sleep 300
           }
