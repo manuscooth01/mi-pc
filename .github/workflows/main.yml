@@ -10,7 +10,7 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────
-      # 1. IDIOMA + RDP + USUARIO (rápido, ~5s)
+      # 1. IDIOMA + RDP + USUARIO
       # ─────────────────────────────────────────────
       - name: Configurar idioma, RDP y usuario
         shell: pwsh
@@ -34,20 +34,18 @@ jobs:
           Write-Host "Idioma, RDP y usuario listos."
 
       # ─────────────────────────────────────────────
-      # 2. DESCARGAR TODO EN PARALELO (rápido, ~30s)
+      # 2. DESCARGAR INSTALADORES EN PARALELO
       # ─────────────────────────────────────────────
       - name: Descargar instaladores en paralelo
         shell: pwsh
         run: |
-          $jobs = @(
-            Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" },
-            Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
-          )
-          $jobs | Wait-Job -Timeout 180 | Out-Null
-          $jobs | Receive-Job
-          $jobs | Remove-Job -Force
+          $job1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
+          $job2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
+          Wait-Job $job1, $job2 -Timeout 180 | Out-Null
+          Receive-Job $job1, $job2
+          Remove-Job $job1, $job2 -Force
           Write-Host "Descargas completadas:"
-          Get-Item "$env:TEMP\ts.msi","$env:TEMP\vigem.exe" | Select-Object Name,Length
+          Get-Item "$env:TEMP\ts.msi", "$env:TEMP\vigem.exe" | Select-Object Name, Length
 
       # ─────────────────────────────────────────────
       # 3. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
@@ -62,7 +60,7 @@ jobs:
           Write-Host "Tailscale y ViGEmBus instalados."
 
       # ─────────────────────────────────────────────
-      # 4. CONECTAR TAILSCALE (rápido, ~10s)
+      # 4. CONECTAR TAILSCALE
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
@@ -76,7 +74,7 @@ jobs:
           Write-Host "IP Tailscale: $ip"
 
       # ─────────────────────────────────────────────
-      # 5. INSTALAR APOLLO (lo más lento, ~60-90s)
+      # 5. INSTALAR APOLLO
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
@@ -93,7 +91,7 @@ jobs:
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not (Test-Path $exe)) {
-            $exe = Get-ChildItem "$env:ProgramFiles\Apollo","$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue |
+            $exe = Get-ChildItem "$env:ProgramFiles\Apollo", "$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue |
                    Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
@@ -132,13 +130,13 @@ jobs:
         shell: pwsh
         run: |
           $j1 = Start-Job {
-            foreach ($s in @("SysMain","WSearch","DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
+            foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
           }
           $j2 = Start-Job {
-            foreach ($p in @(47984,47989,47990,48010)) {
+            foreach ($p in @(47984, 47989, 47990, 48010)) {
               New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
             }
-            foreach ($p in @(47998,47999,48000,48002,48010)) {
+            foreach ($p in @(47998, 47999, 48000, 48002, 48010)) {
               New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
             }
           }
