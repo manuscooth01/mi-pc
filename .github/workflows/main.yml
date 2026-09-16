@@ -81,6 +81,7 @@ jobs:
           $dir = "$env:ProgramFiles\Apollo\config"
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
 
+          # --- Escribir sunshine.conf ---
           @(
             "encoder = software"
             "sw_preset = ultrafast"
@@ -93,8 +94,16 @@ jobs:
             "fec_percentage = 20"
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
 
-          & $env:APOLLO_EXE --creds Manuela Manu1234
-          Write-Host "Configuración escrita."
+          # --- Escribir sunshine_state.json directamente ---
+          $stateFile = Join-Path $dir "sunshine_state.json"
+          $stateJson = @{
+            "username" = "Manuela"
+            "password" = "Manu1234"
+            "salt" = "abcdef0123456789"
+          } | ConvertTo-Json
+          $stateJson | Out-File "$stateFile" -Encoding UTF8
+
+          Write-Host "Configuración y estado de Apollo escritos."
 
       - name: Configurar firewall
         shell: pwsh
@@ -167,9 +176,9 @@ jobs:
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
           $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER/comments"
 
-          # Basic auth manual para Apollo (esto arregla el 401)
+          # --- Basic auth manual y robusto para Apollo (esto arregla el 401) ---
           $pair = "Manuela:Manu1234"
-          $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($pair))
+          $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
           $apolloAuth = "Basic $base64"
 
           $pinEnviado = $false
