@@ -1,0 +1,152 @@
+name: Apollo Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  server:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      # 1. Idioma, RDP, usuario
+      - name: Configuracion inicial
+        shell: pwsh
+        run: |
+          Set-WinSystemLocale -SystemLocale es-VE
+          Set-WinUILanguageOverride -Language es-VE
+          Set-WinUserLanguageList es-VE -Force
+          Set-Culture es-VE
+          Set-TimeZone -Id "Venezuela Standard Time"
+
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0 -Force
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' UserAuthentication 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389 | Out-Null
+          Restart-Service TermService -Force
+
+          $sp = ConvertTo-SecureString "Manu1234" -AsPlainText -Force
+          if (Get-LocalUser Manuela -EA SilentlyContinue) { Remove-LocalUser Manuela }
+          New-LocalUser Manuela -Password $sp -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember Administrators Manuela
+          Add-LocalGroupMember "Remote Desktop Users" Manuela
+          Write-Host "Configuracion inicial lista."
+
+      # 2. Dependencias
+      - name: Instalar dependencias
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$env:TEMP\vc.exe"
+          Start-Process "$env:TEMP\vc.exe" "/install /quiet /norestart" -Wait
+
+          $j1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
+          $j2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
+          Wait-Job $j1, $j2 -Timeout 180 | Out-Null
+          Remove-Job $j1, $j2 -Force
+
+          $j1 = Start-Job { Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait }
+          $j2 = Start-Job { Start-Process "$env:TEMP\vigem.exe" "/exenoui /qn /norestart" -Wait }
+          Wait-Job $j1, $j2 -Timeout 300 | Out-Null
+          Remove-Job $j1, $j2 -Force
+          Write-Host "Dependencias instaladas."
+
+      # 3. Tailscale con hostname FIJO
+      - name: Conectar Tailscale
+        shell: pwsh
+        run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=moonlight-server
+          Start-Sleep 10
+          $ip = & $ts ip -4
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+          Write-Host "Servidor visible en Tailscale como: moonlight-server"
+          Write-Host "IP Tailscale: $ip"
+
+      # 4. Apollo
+      - name: Instalar y configurar Apollo
+        shell: pwsh
+        run: |
+          winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+
+          $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
+          if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
+          if (-not $exe) { Write-Error "Apollo no encontrado"; exit 1 }
+          echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
+
+          Get-Service "*Apollo*", "*Sunshine*" -EA SilentlyContinue | Stop-Service -Force -EA SilentlyContinue
+          Get-Process "*apollo*", "*sunshine*" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+          Start-Sleep 3
+
+          $dir = "$env:ProgramFiles\Apollo\config"
+          if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
+
+          @(
+            "encoder = software"
+            "sw_preset = ultrafast"
+            "sw_tune = zerolatency"
+            "min_threads = 4"
+            "minimum_fps_target = 30"
+            "capture = ddx"
+            "hevc_mode = 1"
+            "av1_mode = 1"
+            "fec_percentage = 20"
+          ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
+
+          & $env:APOLLO_EXE --creds Manuela Manu1234
+          Write-Host "Apollo configurado."
+
+      # 5. Firewall y CPU
+      - name: Firewall y optimizacion
+        shell: pwsh
+        run: |
+          foreach ($p in @(47984, 47989, 47990, 48010)) {
+            Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
+            New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
+          }
+          foreach ($p in @(47998, 47999, 48000, 48002, 48010)) {
+            Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
+            New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
+          }
+          foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          Write-Host "Firewall y CPU listos."
+
+      # 6. Arrancar Apollo
+      - name: Iniciar Apollo
+        shell: pwsh
+        run: |
+          $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
+          if ($svc) { Start-Service $svc.Name } else { Start-Process $env:APOLLO_EXE -WindowStyle Hidden }
+
+          for ($i = 0; $i -lt 18; $i++) {
+            Start-Sleep 5
+            if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) { break }
+          }
+          Write-Host "Apollo escuchando en puerto 47990."
+
+      # 7. Info final
+      - name: Datos de conexion
+        shell: pwsh
+        run: |
+          Write-Host "====================================================="
+          Write-Host "  SERVIDOR APOLLO ACTIVO"
+          Write-Host "====================================================="
+          Write-Host "  Hostname Tailscale : moonlight-server"
+          Write-Host "  IP Tailscale       : $env:TS_IP"
+          Write-Host "  Usuario RDP        : Manuela / Manu1234"
+          Write-Host "  Puerto RDP         : 3389"
+          Write-Host "====================================================="
+          Write-Host "  PASO 1: En Moonlight, anade host con: moonlight-server"
+          Write-Host "  PASO 2: Moonlight mostrara un PIN de 4 digitos"
+          Write-Host "  PASO 3: Ejecuta el workflow 'Apollo Send PIN' con ese PIN"
+          Write-Host "====================================================="
+          Write-Host "  NO canceles este workflow mientras lo uses."
+          Write-Host "====================================================="
+
+      # 8. Keep alive
+      - name: Keep alive
+        shell: pwsh
+        run: |
+          while ($true) {
+            Write-Host "[$(Get-Date)] Servidor activo - NO canceles"
+            Start-Sleep 300
+          }
