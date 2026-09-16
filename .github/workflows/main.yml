@@ -2,6 +2,10 @@ name: Apollo Moonlight
 
 on:
   workflow_dispatch:
+    inputs:
+      moonlight_pin:
+        description: 'PIN de 4 dígitos que muestra Moonlight'
+        required: true
 
 jobs:
   stream:
@@ -10,7 +14,7 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────
-      # 1. IDIOMA + RDP + USUARIO
+      # 1. CONFIGURACIÓN INICIAL (IDIOMA, RDP, USUARIO)
       # ─────────────────────────────────────────────
       - name: Configurar idioma, RDP y usuario
         shell: pwsh
@@ -31,68 +35,38 @@ jobs:
           New-LocalUser Manuela -Password $sp -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember Administrators Manuela
           Add-LocalGroupMember "Remote Desktop Users" Manuela
-          Write-Host "Idioma, RDP y usuario listos."
+          Write-Host "Configuración inicial lista."
 
       # ─────────────────────────────────────────────
-      # 2. RESOLUCIÓN 720p
+      # 2. INSTALAR DEPENDENCIAS (VC++, TAILSCALE, VIGEMBUS)
       # ─────────────────────────────────────────────
-      - name: Configurar resolución 720p
+      - name: Instalar dependencias
         shell: pwsh
         run: |
-          try {
-            $wmi = Get-WmiObject -Class Win32_VideoController | Select-Object -First 1
-            $wmi.SetVideoMode(1280, 720, 32, 60)
-            Write-Host "Resolución 1280x720 establecida."
-          } catch {
-            Write-Warning "No se pudo cambiar la resolución, se usará la predeterminada."
-          }
+          # Visual C++ Redistributable
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$env:TEMP\vc.exe"
+          Start-Process "$env:TEMP\vc.exe" -ArgumentList "/install", "/quiet", "/norestart" -Wait
 
-      # ─────────────────────────────────────────────
-      # 3. VISUAL C++ REDISTRIBUTABLE
-      # ─────────────────────────────────────────────
-      - name: Instalar Visual C++ Redistributable
-        shell: pwsh
-        run: |
-          $vcUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-          $vcPath = "$env:TEMP\vc_redist.x64.exe"
-          Invoke-WebRequest -Uri $vcUrl -OutFile $vcPath
-          Start-Process -FilePath $vcPath -ArgumentList "/install", "/quiet", "/norestart" -Wait
-          Remove-Item $vcPath -Force
-          Write-Host "Visual C++ Redistributable instalado."
+          # Descargas en paralelo
+          $j1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
+          $j2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
+          Wait-Job $j1, $j2 | Out-Null
+          Receive-Job $j1, $j2; Remove-Job $j1, $j2
 
-      # ─────────────────────────────────────────────
-      # 4. DESCARGAS EN PARALELO
-      # ─────────────────────────────────────────────
-      - name: Descargar instaladores
-        shell: pwsh
-        run: |
-          $job1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
-          $job2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
-          Wait-Job $job1, $job2 -Timeout 180 | Out-Null
-          Receive-Job $job1, $job2
-          Remove-Job $job1, $job2 -Force
-          Write-Host "Descargas completadas."
-
-      # ─────────────────────────────────────────────
-      # 5. INSTALACIONES EN PARALELO
-      # ─────────────────────────────────────────────
-      - name: Instalar Tailscale y ViGEmBus
-        shell: pwsh
-        run: |
+          # Instalaciones en paralelo
           $j1 = Start-Job { Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait }
           $j2 = Start-Job { Start-Process "$env:TEMP\vigem.exe" "/exenoui /qn /norestart" -Wait }
-          $j1, $j2 | Wait-Job -Timeout 300 | Out-Null
-          $j1, $j2 | Remove-Job -Force
-          Write-Host "Tailscale y ViGEmBus instalados."
+          Wait-Job $j1, $j2 | Out-Null
+          Remove-Job $j1, $j2
+          Write-Host "Dependencias instaladas."
 
       # ─────────────────────────────────────────────
-      # 6. TAILSCALE (CON HOSTNAME FIJO)
+      # 3. CONECTAR TAILSCALE (CON HOSTNAME FIJO)
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
         run: |
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          # Hostname fijo para mantener la misma IP siempre
           & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=moonlight-venezuela
           $ip = $null; $i = 0
           while (-not $ip -and $i -lt 15) { $ip = & $ts ip -4 2>$null; Start-Sleep 3; $i++ }
@@ -101,28 +75,22 @@ jobs:
           Write-Host "IP Tailscale: $ip"
 
       # ─────────────────────────────────────────────
-      # 7. INSTALAR APOLLO
+      # 4. INSTALAR Y CONFIGURAR APOLLO
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
         run: |
           winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-          Write-Host "Apollo instalado."
 
-      # ─────────────────────────────────────────────
-      # 8. LOCALIZAR EJECUTABLE
-      # ─────────────────────────────────────────────
-      - name: Localizar ejecutable
-        shell: pwsh
-        run: |
+          # Localizar el ejecutable
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
           echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
-          Write-Host "Ejecutable: $exe"
+          Write-Host "Apollo instalado en: $exe"
 
       # ─────────────────────────────────────────────
-      # 9. CONFIGURAR APOLLO (SIN PIN)
+      # 5. CONFIGURAR APOLLO (RENDIMIENTO PARA CPU)
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -132,41 +100,30 @@ jobs:
           Start-Sleep 3
 
           $dir = "$env:ProgramFiles\Apollo\config"
-          if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\Sunshine\config" }
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
 
           @(
-            "# --- ENCODER (CPU) ---"
             "encoder = software"
             "sw_preset = ultrafast"
             "sw_tune = zerolatency"
             "min_threads = 4"
             "minimum_fps_target = 30"
-            ""
-            "# --- CAPTURA ---"
             "capture = ddx"
-            ""
-            "# --- CODECS ---"
             "hevc_mode = 1"
             "av1_mode = 1"
-            ""
-            "# --- RED ---"
             "fec_percentage = 20"
-            ""
-            "# --- SIN PIN (EMPAREJAMIENTO AUTOMÁTICO) ---"
-            'pin = ""'
-            "always_require_pin = false"
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
 
           & $env:APOLLO_EXE --creds Manuela Manu1234
-          Write-Host "Configuración escrita (sin PIN)."
+          Write-Host "Configuración de Apollo escrita."
 
       # ─────────────────────────────────────────────
-      # 10. FIREWALL
+      # 6. CONFIGURAR FIREWALL Y OPTIMIZAR CPU
       # ─────────────────────────────────────────────
-      - name: Configurar firewall
+      - name: Configurar firewall y optimizar
         shell: pwsh
         run: |
+          # Firewall
           $ports = @(47984, 47989, 47990, 48010)
           foreach ($p in $ports) {
             Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
@@ -176,26 +133,19 @@ jobs:
             Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
             New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
-          Write-Host "Firewall configurado."
 
-      # ─────────────────────────────────────────────
-      # 11. OPTIMIZAR CPU
-      # ─────────────────────────────────────────────
-      - name: Optimizar CPU
-        shell: pwsh
-        run: |
+          # Optimización de CPU
           foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          Write-Host "Optimizaciones aplicadas."
+          Write-Host "Firewall y optimizaciones aplicadas."
 
       # ─────────────────────────────────────────────
-      # 12. INICIAR APOLLO
+      # 7. INICIAR APOLLO Y EMPAREJAR POR API
       # ─────────────────────────────────────────────
-      - name: Iniciar Apollo
+      - name: Iniciar Apollo y emparejar
         shell: pwsh
         run: |
           $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
-          if (-not $svc) { $svc = Get-Service "*Sunshine*" -EA SilentlyContinue | Select-Object -First 1 }
           if ($svc) { Start-Service $svc.Name } else { Start-Process $env:APOLLO_EXE -WindowStyle Hidden }
 
           $ok = $false
@@ -203,12 +153,24 @@ jobs:
             Start-Sleep 5
             if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) { $ok = $true; break }
           }
-          if (-not $ok) { Write-Warning "Puerto 47990 nunca se abrió." } else { Write-Host "Puerto 47990 activo." }
+          if (-not $ok) { Write-Error "El puerto 47990 nunca se abrió."; exit 1 }
+          Write-Host "Apollo está activo y escuchando."
+
+          # Emparejamiento automático usando la API
+          Write-Host "Enviando PIN de emparejamiento a Apollo..."
+          $pin = "${{ github.event.inputs.moonlight_pin }}"
+          $body = @{ pin = $pin; name = "Moonlight-VE" } | ConvertTo-Json
+          try {
+            Invoke-RestMethod -Uri "https://localhost:47990/api/pin" -Method Post -SkipCertificateCheck -Authentication Basic -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) -Body $body -ContentType "application/json"
+            Write-Host "¡PIN enviado con éxito! El cliente Moonlight debería estar emparejado."
+          } catch {
+            Write-Warning "Fallo al enviar el PIN: $_"
+          }
 
       # ─────────────────────────────────────────────
-      # 13. MOSTRAR DATOS
+      # 8. MOSTRAR DATOS Y MANTENER VIVO
       # ─────────────────────────────────────────────
-      - name: Mostrar datos de conexión
+      - name: Mostrar datos y mantener activo
         shell: pwsh
         run: |
           Write-Host "========================================="
@@ -217,18 +179,11 @@ jobs:
           Write-Host "  Usuario RDP  : Manuela"
           Write-Host "  Password RDP : Manu1234"
           Write-Host "========================================="
-          Write-Host "  MODO SIN PIN ACTIVADO"
-          Write-Host "  Moonlight se emparejará automáticamente."
-          Write-Host "  Solo añade la IP y conecta."
+          Write-Host "  Moonlight se conectará a la IP de Tailscale."
+          Write-Host "  Si no funciona, usa RDP para verificar el estado."
           Write-Host "========================================="
 
-      # ─────────────────────────────────────────────
-      # 14. KEEP ALIVE
-      # ─────────────────────────────────────────────
-      - name: Keep alive
-        shell: pwsh
-        run: |
           while ($true) {
-            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow si lo estas usando"
+            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow si lo estás usando"
             Start-Sleep 300
           }
