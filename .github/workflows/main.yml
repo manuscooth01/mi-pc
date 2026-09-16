@@ -99,12 +99,11 @@ jobs:
           Write-Host "Ejecutable: $exe"
 
       # ─────────────────────────────────────────────
-      # 7. CONFIGURAR APOLLO (con servicio detenido)
+      # 7. CONFIGURAR APOLLO (opciones válidas)
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
         run: |
-          # Detener servicio para poder escribir config y credenciales limpiamente
           Get-Service "*Apollo*", "*Sunshine*" -EA SilentlyContinue | Stop-Service -Force -EA SilentlyContinue
           Get-Process "*apollo*", "*sunshine*" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
           Start-Sleep 3
@@ -115,11 +114,8 @@ jobs:
           @(
             "encoder = software"
             "capture = ddx"
-            "headless_mode = enabled"
-            "virtual_display = enabled"
             "hevc_mode = 1"
             "av1_mode = 1"
-            "fps = 30"
             "qp = 28"
             "sw_preset = ultrafast"
             "sw_tune = zerolatency"
@@ -151,7 +147,7 @@ jobs:
           Write-Host "Optimizaciones y firewall listos."
 
       # ─────────────────────────────────────────────
-      # 9. INICIAR APOLLO (espera activa al puerto)
+      # 9. INICIAR APOLLO
       # ─────────────────────────────────────────────
       - name: Iniciar Apollo
         shell: pwsh
@@ -167,7 +163,7 @@ jobs:
             Write-Host "Servicio $($svc.Name) iniciado."
           } else {
             Start-Process $env:APOLLO_EXE -WindowStyle Hidden
-            Write-Host "Apollo iniciado como proceso (sin servicio)."
+            Write-Host "Apollo iniciado como proceso."
           }
 
           $ok = $false
@@ -183,56 +179,36 @@ jobs:
           if (-not $ok) { Write-Warning "El puerto 47990 nunca se abrió." }
 
       # ─────────────────────────────────────────────
-      # 10. DIAGNÓSTICO (si algo falla, aquí lo ves)
+      # 10. VERIFICAR WEB UI (HTTPS + certificado autofirmado)
       # ─────────────────────────────────────────────
-      - name: Diagnóstico de Apollo
-        shell: pwsh
-        run: |
-          Write-Host "--- Servicios Apollo/Sunshine ---"
-          Get-Service "*Apollo*", "*Sunshine*" -EA SilentlyContinue | Format-Table Name, Status, StartType -AutoSize
-
-          Write-Host "--- Procesos Apollo/Sunshine ---"
-          Get-Process "*apollo*", "*sunshine*" -EA SilentlyContinue | Format-Table Name, Id, CPU -AutoSize
-
-          Write-Host "--- Puerto 47990 ---"
-          $conn = Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue
-          if ($conn) { $conn | Format-Table LocalAddress, LocalPort, State, OwningProcess -AutoSize }
-          else { Write-Warning "Nadie está escuchando en el puerto 47990" }
-
-          Write-Host "--- Log de Apollo (últimas 30 líneas) ---"
-          $log = "$env:ProgramFiles\Apollo\config\sunshine.log"
-          if (-not (Test-Path $log)) { $log = "$env:ProgramFiles\Sunshine\config\sunshine.log" }
-          if (Test-Path $log) { Get-Content $log -Tail 30 } else { Write-Warning "No se encontró el log" }
-
-      # ─────────────────────────────────────────────
-      # 11. VERIFICAR Y MOSTRAR INFO
-      # ─────────────────────────────────────────────
-      - name: Verificar y mostrar datos
+      - name: Verificar Apollo
         shell: pwsh
         run: |
           $ok = $false
           for ($i = 0; $i -lt 12; $i++) {
             try {
-              $r = Invoke-WebRequest "http://localhost:47990" -UseBasicParsing -TimeoutSec 5
+              $r = Invoke-WebRequest "https://localhost:47990" -UseBasicParsing -TimeoutSec 5 -SkipCertificateCheck
               if ($r.StatusCode -eq 200) { $ok = $true; break }
             } catch { Start-Sleep 5 }
           }
-
           if ($ok) { Write-Host "Apollo Web UI: OK" }
           else { Write-Warning "Web UI aún no responde tras 60s" }
 
           Write-Host ""
           Write-Host "=================================="
           Write-Host "IP Tailscale : $env:TS_IP"
-          Write-Host "Web UI       : http://${env:TS_IP}:47990"
+          Write-Host "Web UI       : https://${env:TS_IP}:47990"
           Write-Host "Usuario      : Manuela"
           Write-Host "Password     : Manu1234"
           Write-Host "RDP          : ${env:TS_IP}:3389"
           Write-Host "Idioma       : Espanol (Venezuela)"
           Write-Host "=================================="
+          Write-Host ""
+          Write-Host "IMPORTANTE: La Web UI usa HTTPS con certificado autofirmado."
+          Write-Host "El navegador te avisara. Acepta la excepcion y continua."
 
       # ─────────────────────────────────────────────
-      # 12. MANTENER VIVO
+      # 11. MANTENER VIVO
       # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
