@@ -9,56 +9,103 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Setup all
+      # ─────────────────────────────────────────────
+      # 1. IDIOMA + RDP + USUARIO (rápido, ~5s)
+      # ─────────────────────────────────────────────
+      - name: Configurar idioma, RDP y usuario
         shell: pwsh
         run: |
-          # ── Idioma Español (Venezuela) ──
           Set-WinSystemLocale -SystemLocale es-VE
           Set-WinUILanguageOverride -Language es-VE
           Set-WinUserLanguageList es-VE -Force
           Set-Culture es-VE
           Set-TimeZone -Id "Venezuela Standard Time"
-          Write-Host "Idioma configurado en español (Venezuela)."
 
-          # ── RDP ──
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0 -Force
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' UserAuthentication 0 -Force
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389 | Out-Null
           Restart-Service TermService -Force
 
-          # ── Usuario ──
           $sp = ConvertTo-SecureString "Manu1234" -AsPlainText -Force
           if (Get-LocalUser Manuela -EA SilentlyContinue) { Remove-LocalUser Manuela }
           New-LocalUser Manuela -Password $sp -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember Administrators Manuela
           Add-LocalGroupMember "Remote Desktop Users" Manuela
+          Write-Host "Idioma, RDP y usuario listos."
 
-          # ── Tailscale ──
-          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi"
-          Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait
+      # ─────────────────────────────────────────────
+      # 2. DESCARGAR TODO EN PARALELO (rápido, ~30s)
+      # ─────────────────────────────────────────────
+      - name: Descargar instaladores en paralelo
+        shell: pwsh
+        run: |
+          $jobs = @(
+            Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" },
+            Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
+          )
+          $jobs | Wait-Job -Timeout 180 | Out-Null
+          $jobs | Receive-Job
+          $jobs | Remove-Job -Force
+          Write-Host "Descargas completadas:"
+          Get-Item "$env:TEMP\ts.msi","$env:TEMP\vigem.exe" | Select-Object Name,Length
+
+      # ─────────────────────────────────────────────
+      # 3. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
+      # ─────────────────────────────────────────────
+      - name: Instalar Tailscale y ViGEmBus
+        shell: pwsh
+        run: |
+          $j1 = Start-Job { Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait }
+          $j2 = Start-Job { Start-Process "$env:TEMP\vigem.exe" "/exenoui /qn /norestart" -Wait }
+          $j1, $j2 | Wait-Job -Timeout 300 | Out-Null
+          $j1, $j2 | Remove-Job -Force
+          Write-Host "Tailscale y ViGEmBus instalados."
+
+      # ─────────────────────────────────────────────
+      # 4. CONECTAR TAILSCALE (rápido, ~10s)
+      # ─────────────────────────────────────────────
+      - name: Conectar Tailscale
+        shell: pwsh
+        run: |
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
           & $ts up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ml-$env:GITHUB_RUN_ID
           $ip = $null; $i = 0
-          while (-not $ip -and $i -lt 15) { $ip = & $ts ip -4 2>$null; Start-Sleep 5; $i++ }
+          while (-not $ip -and $i -lt 15) { $ip = & $ts ip -4 2>$null; Start-Sleep 3; $i++ }
+          if (-not $ip) { Write-Error "Sin IP Tailscale"; exit 1 }
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
+          Write-Host "IP Tailscale: $ip"
 
-          # ── ViGEmBus ──
-          Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\v.exe"
-          Start-Process "$env:TEMP\v.exe" "/exenoui /qn /norestart" -Wait
-
-          # ── Apollo ──
+      # ─────────────────────────────────────────────
+      # 5. INSTALAR APOLLO (lo más lento, ~60-90s)
+      # ─────────────────────────────────────────────
+      - name: Instalar Apollo
+        shell: pwsh
+        run: |
           winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+          Write-Host "Apollo instalado."
 
-          # ── Buscar ejecutable ──
+      # ─────────────────────────────────────────────
+      # 6. LOCALIZAR EJECUTABLE
+      # ─────────────────────────────────────────────
+      - name: Localizar ejecutable de Apollo
+        shell: pwsh
+        run: |
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not (Test-Path $exe)) {
-            $exe = Get-ChildItem "$env:ProgramFiles\Apollo","$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+            $exe = Get-ChildItem "$env:ProgramFiles\Apollo","$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue |
+                   Select-Object -First 1 -ExpandProperty FullName
           }
-          if (-not $exe) { Write-Error "Apollo/Sunshine executable not found"; exit 1 }
+          if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
+          echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
           Write-Host "Ejecutable: $exe"
 
-          # ── Config Apollo ──
+      # ─────────────────────────────────────────────
+      # 7. CONFIGURAR APOLLO
+      # ─────────────────────────────────────────────
+      - name: Configurar Apollo
+        shell: pwsh
+        run: |
           $dir = "$env:ProgramFiles\Apollo\config"
           if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\Sunshine\config" }
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
@@ -75,28 +122,54 @@ jobs:
             "sw_tune = zerolatency"
             "min_threads = 8"
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
+          & $env:APOLLO_EXE --creds Manuela Manu1234
+          Write-Host "Configuración escrita."
 
-          & $exe --creds Manuela Manu1234
-
-          # ── Optimizaciones ──
-          foreach ($s in @("SysMain","WSearch","DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
+      # ─────────────────────────────────────────────
+      # 8. OPTIMIZACIONES + FIREWALL EN PARALELO
+      # ─────────────────────────────────────────────
+      - name: Optimizar CPU y abrir firewall
+        shell: pwsh
+        run: |
+          $j1 = Start-Job {
+            foreach ($s in @("SysMain","WSearch","DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
+          }
+          $j2 = Start-Job {
+            foreach ($p in @(47984,47989,47990,48010)) {
+              New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
+            }
+            foreach ($p in @(47998,47999,48000,48002,48010)) {
+              New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
+            }
+          }
+          $j1, $j2 | Wait-Job -Timeout 60 | Out-Null
+          $j1, $j2 | Remove-Job -Force
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          Write-Host "Optimizaciones y firewall listos."
 
-          # ── Firewall ──
-          foreach ($p in @(47984,47989,47990,48010)) {
-            New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
-          }
-          foreach ($p in @(47998,47999,48000,48002,48010)) {
-            New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
-          }
-
-          # ── Iniciar Apollo ──
+      # ─────────────────────────────────────────────
+      # 9. INICIAR APOLLO
+      # ─────────────────────────────────────────────
+      - name: Iniciar Apollo
+        shell: pwsh
+        run: |
           $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
           if (-not $svc) { $svc = Get-Service "*Sunshine*" -EA SilentlyContinue | Select-Object -First 1 }
-          if ($svc) { Start-Service $svc.Name } else { Start-Process $exe -WindowStyle Hidden }
+          if ($svc) { Start-Service $svc.Name; Write-Host "Servicio $($svc.Name) iniciado." }
+          else { Start-Process $env:APOLLO_EXE -WindowStyle Hidden; Write-Host "Apollo iniciado como proceso." }
 
-          # ── Info final ──
-          Start-Sleep 20
+      # ─────────────────────────────────────────────
+      # 10. VERIFICAR Y MOSTRAR INFO
+      # ─────────────────────────────────────────────
+      - name: Verificar y mostrar datos
+        shell: pwsh
+        run: |
+          Start-Sleep 15
+          try {
+            $r = Invoke-WebRequest "http://localhost:47990" -UseBasicParsing -TimeoutSec 10
+            Write-Host "Apollo Web UI: OK ($($r.StatusCode))"
+          } catch { Write-Warning "Web UI aún no responde" }
+
           Write-Host ""
           Write-Host "=================================="
           Write-Host "IP Tailscale : $env:TS_IP"
@@ -105,9 +178,11 @@ jobs:
           Write-Host "Password     : Manu1234"
           Write-Host "RDP          : ${env:TS_IP}:3389"
           Write-Host "Idioma       : Espanol (Venezuela)"
-          Write-Host "Zona horaria : Venezuela (UTC-4)"
           Write-Host "=================================="
 
+      # ─────────────────────────────────────────────
+      # 11. MANTENER VIVO
+      # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
         run: |
