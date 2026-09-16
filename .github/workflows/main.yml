@@ -12,13 +12,21 @@ jobs:
       - name: Setup all
         shell: pwsh
         run: |
+          # ── Idioma Español (Venezuela) ──
+          Set-WinSystemLocale -SystemLocale es-VE
+          Set-WinUILanguageOverride -Language es-VE
+          Set-WinUserLanguageList es-VE -Force
+          Set-Culture es-VE
+          Set-TimeZone -Id "Venezuela Standard Time"
+          Write-Host "Idioma configurado en español (Venezuela)."
+
           # ── RDP ──
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0 -Force
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' UserAuthentication 0 -Force
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389 | Out-Null
           Restart-Service TermService -Force
 
-          # ── User ──
+          # ── Usuario ──
           $sp = ConvertTo-SecureString "Manu1234" -AsPlainText -Force
           if (Get-LocalUser Manuela -EA SilentlyContinue) { Remove-LocalUser Manuela }
           New-LocalUser Manuela -Password $sp -AccountNeverExpires -PasswordNeverExpires
@@ -41,16 +49,16 @@ jobs:
           # ── Apollo ──
           winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
 
-          # ── Find executable (Apollo uses sunshine.exe, not apollo.exe) ──
+          # ── Buscar ejecutable ──
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not (Test-Path $exe)) {
             $exe = Get-ChildItem "$env:ProgramFiles\Apollo","$env:ProgramFiles\Sunshine" -Filter *.exe -Recurse -EA SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $exe) { Write-Error "Apollo/Sunshine executable not found"; exit 1 }
-          Write-Host "Using executable: $exe"
+          Write-Host "Ejecutable: $exe"
 
-          # ── Config ──
+          # ── Config Apollo ──
           $dir = "$env:ProgramFiles\Apollo\config"
           if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\Sunshine\config" }
           if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
@@ -70,7 +78,7 @@ jobs:
 
           & $exe --creds Manuela Manu1234
 
-          # ── Optimizations ──
+          # ── Optimizaciones ──
           foreach ($s in @("SysMain","WSearch","DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
 
@@ -82,12 +90,12 @@ jobs:
             New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
           }
 
-          # ── Start Apollo ──
+          # ── Iniciar Apollo ──
           $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
           if (-not $svc) { $svc = Get-Service "*Sunshine*" -EA SilentlyContinue | Select-Object -First 1 }
           if ($svc) { Start-Service $svc.Name } else { Start-Process $exe -WindowStyle Hidden }
 
-          # ── Show info ──
+          # ── Info final ──
           Start-Sleep 20
           Write-Host ""
           Write-Host "=================================="
@@ -96,6 +104,8 @@ jobs:
           Write-Host "Usuario      : Manuela"
           Write-Host "Password     : Manu1234"
           Write-Host "RDP          : ${env:TS_IP}:3389"
+          Write-Host "Idioma       : Espanol (Venezuela)"
+          Write-Host "Zona horaria : Venezuela (UTC-4)"
           Write-Host "=================================="
 
       - name: Keep alive
