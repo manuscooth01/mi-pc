@@ -2,10 +2,10 @@ name: Apollo Moonlight
 
 on:
   workflow_dispatch:
-    inputs:
-      moonlight_pin:
-        description: 'PIN de 4 dígitos que muestra Moonlight'
-        required: true
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   stream:
@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────
-      # 1. CONFIGURACIÓN INICIAL (IDIOMA, RDP, USUARIO)
+      # 1. CONFIGURACIÓN INICIAL
       # ─────────────────────────────────────────────
       - name: Configurar idioma, RDP y usuario
         shell: pwsh
@@ -38,22 +38,19 @@ jobs:
           Write-Host "Configuración inicial lista."
 
       # ─────────────────────────────────────────────
-      # 2. INSTALAR DEPENDENCIAS (VC++, TAILSCALE, VIGEMBUS)
+      # 2. INSTALAR DEPENDENCIAS
       # ─────────────────────────────────────────────
       - name: Instalar dependencias
         shell: pwsh
         run: |
-          # Visual C++ Redistributable
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$env:TEMP\vc.exe"
           Start-Process "$env:TEMP\vc.exe" -ArgumentList "/install", "/quiet", "/norestart" -Wait
 
-          # Descargas en paralelo
           $j1 = Start-Job { Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi" }
           $j2 = Start-Job { Invoke-WebRequest "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile "$env:TEMP\vigem.exe" }
           Wait-Job $j1, $j2 | Out-Null
           Receive-Job $j1, $j2; Remove-Job $j1, $j2
 
-          # Instalaciones en paralelo
           $j1 = Start-Job { Start-Process msiexec "/i `"$env:TEMP\ts.msi`" /quiet /norestart" -Wait }
           $j2 = Start-Job { Start-Process "$env:TEMP\vigem.exe" "/exenoui /qn /norestart" -Wait }
           Wait-Job $j1, $j2 | Out-Null
@@ -61,7 +58,7 @@ jobs:
           Write-Host "Dependencias instaladas."
 
       # ─────────────────────────────────────────────
-      # 3. CONECTAR TAILSCALE (CON HOSTNAME FIJO)
+      # 3. TAILSCALE
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
@@ -75,22 +72,20 @@ jobs:
           Write-Host "IP Tailscale: $ip"
 
       # ─────────────────────────────────────────────
-      # 4. INSTALAR Y CONFIGURAR APOLLO
+      # 4. INSTALAR APOLLO
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
         run: |
           winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
 
-          # Localizar el ejecutable
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
           echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
-          Write-Host "Apollo instalado en: $exe"
 
       # ─────────────────────────────────────────────
-      # 5. CONFIGURAR APOLLO (RENDIMIENTO PARA CPU)
+      # 5. CONFIGURAR APOLLO
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -115,17 +110,15 @@ jobs:
           ) | Out-File "$dir\sunshine.conf" -Encoding UTF8
 
           & $env:APOLLO_EXE --creds Manuela Manu1234
-          Write-Host "Configuración de Apollo escrita."
+          Write-Host "Configuración escrita."
 
       # ─────────────────────────────────────────────
-      # 6. CONFIGURAR FIREWALL Y OPTIMIZAR CPU
+      # 6. FIREWALL
       # ─────────────────────────────────────────────
-      - name: Configurar firewall y optimizar
+      - name: Configurar firewall
         shell: pwsh
         run: |
-          # Firewall
-          $ports = @(47984, 47989, 47990, 48010)
-          foreach ($p in $ports) {
+          foreach ($p in @(47984, 47989, 47990, 48010)) {
             Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
             New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
@@ -133,16 +126,14 @@ jobs:
             Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
             New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
-
-          # Optimización de CPU
           foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
           Write-Host "Firewall y optimizaciones aplicadas."
 
       # ─────────────────────────────────────────────
-      # 7. INICIAR APOLLO Y EMPAREJAR POR API
+      # 7. INICIAR APOLLO
       # ─────────────────────────────────────────────
-      - name: Iniciar Apollo y emparejar
+      - name: Iniciar Apollo
         shell: pwsh
         run: |
           $svc = Get-Service "*Apollo*" -EA SilentlyContinue | Select-Object -First 1
@@ -154,36 +145,116 @@ jobs:
             if (Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue) { $ok = $true; break }
           }
           if (-not $ok) { Write-Error "El puerto 47990 nunca se abrió."; exit 1 }
-          Write-Host "Apollo está activo y escuchando."
-
-          # Emparejamiento automático usando la API
-          Write-Host "Enviando PIN de emparejamiento a Apollo..."
-          $pin = "${{ github.event.inputs.moonlight_pin }}"
-          $body = @{ pin = $pin; name = "Moonlight-VE" } | ConvertTo-Json
-          try {
-            Invoke-RestMethod -Uri "https://localhost:47990/api/pin" -Method Post -SkipCertificateCheck -Authentication Basic -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) -Body $body -ContentType "application/json"
-            Write-Host "¡PIN enviado con éxito! El cliente Moonlight debería estar emparejado."
-          } catch {
-            Write-Warning "Fallo al enviar el PIN: $_"
-          }
+          Write-Host "Apollo activo."
 
       # ─────────────────────────────────────────────
-      # 8. MOSTRAR DATOS Y MANTENER VIVO
+      # 8. CREAR ISSUE PARA RECIBIR EL PIN
       # ─────────────────────────────────────────────
-      - name: Mostrar datos y mantener activo
+      - name: Crear Issue para el PIN
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $title = "Moonlight PIN - $env:GITHUB_RUN_ID"
+          $body = @"
+          ## Servidor Apollo listo
+
+          **IP Tailscale:** ``$env:TS_IP``
+          **RDP:** ``${env:TS_IP}:3389`` (Usuario: Manuela / Password: Manu1234)
+
+          ### Como emparejar Moonlight
+
+          1. Abre Moonlight en tu celular
+          2. Añade un host manual con la IP: ``$env:TS_IP``
+          3. Moonlight te mostrará un PIN de 4 dígitos
+          4. **Comenta este Issue con el PIN (solo el número)**
+          5. El servidor lo detectará y emparejará automáticamente
+          6. Este Issue se cerrará solo cuando el emparejamiento termine
+
+          ⏱️ El servidor expira en 1 hora. Si tarda más, vuelve a lanzar el workflow.
+          "@ -replace "          ", ""
+
+          $issueJson = @{
+            title = $title
+            body  = $body
+          } | ConvertTo-Json
+
+          $issue = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues" `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" } `
+            -Body $issueJson `
+            -ContentType "application/json"
+
+          echo "ISSUE_NUMBER=$($issue.number)" >> $env:GITHUB_ENV
+          Write-Host "Issue #$($issue.number) creado para recibir el PIN."
+
+      # ─────────────────────────────────────────────
+      # 9. POLLING DEL ISSUE Y EMPAREJAMIENTO
+      # ─────────────────────────────────────────────
+      - name: Esperar PIN y emparejar
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           Write-Host "========================================="
           Write-Host "  IP Tailscale : $env:TS_IP"
-          Write-Host "  RDP          : ${env:TS_IP}:3389"
-          Write-Host "  Usuario RDP  : Manuela"
-          Write-Host "  Password RDP : Manu1234"
+          Write-Host "  Issue #$env:ISSUE_NUMBER"
           Write-Host "========================================="
-          Write-Host "  Moonlight se conectará a la IP de Tailscale."
-          Write-Host "  Si no funciona, usa RDP para verificar el estado."
-          Write-Host "========================================="
+          Write-Host "Añade la IP en Moonlight y comenta el PIN en el Issue."
+          Write-Host "Esperando PIN (máximo 30 minutos)..."
 
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER/comments"
+
+          $pinEnviado = $false
+          $deadline = (Get-Date).AddMinutes(30)
+
+          while (-not $pinEnviado -and (Get-Date) -lt $deadline) {
+            Start-Sleep 20
+            try {
+              $comments = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+              foreach ($c in $comments) {
+                $body = $c.body.Trim()
+                if ($body -match '^\d{4}$') {
+                  Write-Host "PIN detectado: $body"
+                  $payload = @{ pin = $body; name = "Moonlight-VE" } | ConvertTo-Json
+                  try {
+                    Invoke-RestMethod -Uri "https://localhost:47990/api/pin" `
+                      -Method Post -SkipCertificateCheck `
+                      -Authentication Basic `
+                      -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) `
+                      -Body $payload -ContentType "application/json"
+                    Write-Host "PIN enviado a Apollo con exito."
+                    $pinEnviado = $true
+
+                    # Comentar confirmación y cerrar el issue
+                    $confirm = @{ body = "✅ PIN recibido y enviado a Apollo. Moonlight debería estar emparejado. Puedes cerrar este Issue." } | ConvertTo-Json
+                    Invoke-RestMethod -Uri $url -Headers $headers -Method Post -Body $confirm -ContentType "application/json" | Out-Null
+                    Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER" `
+                      -Headers $headers -Method Patch `
+                      -Body (@{ state = "closed" } | ConvertTo-Json) -ContentType "application/json" | Out-Null
+                    break
+                  } catch {
+                    Write-Warning "Fallo al enviar PIN: $_"
+                  }
+                }
+              }
+            } catch {
+              Write-Warning "Error consultando comentarios: $_"
+            }
+          }
+
+          if (-not $pinEnviado) {
+            Write-Warning "No se recibió PIN en 30 minutos. El servidor sigue activo; puedes seguir intentando desde RDP."
+          }
+
+      # ─────────────────────────────────────────────
+      # 10. KEEP ALIVE
+      # ─────────────────────────────────────────────
+      - name: Keep alive
+        shell: pwsh
+        run: |
           while ($true) {
-            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow si lo estás usando"
+            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow"
             Start-Sleep 300
           }
