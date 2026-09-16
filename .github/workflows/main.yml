@@ -13,9 +13,6 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      # ─────────────────────────────────────────────
-      # 1. CONFIGURACIÓN INICIAL
-      # ─────────────────────────────────────────────
       - name: Configurar idioma, RDP y usuario
         shell: pwsh
         run: |
@@ -37,9 +34,6 @@ jobs:
           Add-LocalGroupMember "Remote Desktop Users" Manuela
           Write-Host "Configuración inicial lista."
 
-      # ─────────────────────────────────────────────
-      # 2. INSTALAR DEPENDENCIAS
-      # ─────────────────────────────────────────────
       - name: Instalar dependencias
         shell: pwsh
         run: |
@@ -57,9 +51,6 @@ jobs:
           Remove-Job $j1, $j2
           Write-Host "Dependencias instaladas."
 
-      # ─────────────────────────────────────────────
-      # 3. TAILSCALE
-      # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
         run: |
@@ -71,22 +62,15 @@ jobs:
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
           Write-Host "IP Tailscale: $ip"
 
-      # ─────────────────────────────────────────────
-      # 4. INSTALAR APOLLO
-      # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
         run: |
           winget install --id ClassicOldSong.Apollo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-
           $exe = "$env:ProgramFiles\Apollo\sunshine.exe"
           if (-not (Test-Path $exe)) { $exe = "$env:ProgramFiles\Sunshine\sunshine.exe" }
           if (-not $exe) { Write-Error "Ejecutable no encontrado"; exit 1 }
           echo "APOLLO_EXE=$exe" >> $env:GITHUB_ENV
 
-      # ─────────────────────────────────────────────
-      # 5. CONFIGURAR APOLLO
-      # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
         run: |
@@ -112,9 +96,6 @@ jobs:
           & $env:APOLLO_EXE --creds Manuela Manu1234
           Write-Host "Configuración escrita."
 
-      # ─────────────────────────────────────────────
-      # 6. FIREWALL
-      # ─────────────────────────────────────────────
       - name: Configurar firewall
         shell: pwsh
         run: |
@@ -130,9 +111,6 @@ jobs:
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
           Write-Host "Firewall y optimizaciones aplicadas."
 
-      # ─────────────────────────────────────────────
-      # 7. INICIAR APOLLO
-      # ─────────────────────────────────────────────
       - name: Iniciar Apollo
         shell: pwsh
         run: |
@@ -147,38 +125,25 @@ jobs:
           if (-not $ok) { Write-Error "El puerto 47990 nunca se abrió."; exit 1 }
           Write-Host "Apollo activo."
 
-      # ─────────────────────────────────────────────
-      # 8. CREAR ISSUE PARA RECIBIR EL PIN
-      # ─────────────────────────────────────────────
       - name: Crear Issue para el PIN
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $title = "Moonlight PIN - $env:GITHUB_RUN_ID"
-          $body = @"
-          ## Servidor Apollo listo
+          $body = "## Servidor Apollo listo`n`n" +
+                  "**IP Tailscale:** ``$env:TS_IP```n" +
+                  "**RDP:** ``${env:TS_IP}:3389`` (Usuario: Manuela / Password: Manu1234)`n`n" +
+                  "### Como emparejar Moonlight`n`n" +
+                  "1. Abre Moonlight en tu celular`n" +
+                  "2. Añade un host manual con la IP: ``$env:TS_IP```n" +
+                  "3. Moonlight te mostrará un PIN de 4 dígitos`n" +
+                  "4. **Comenta este Issue con el PIN (solo el número)**`n" +
+                  "5. El servidor lo detectará y emparejará automáticamente`n" +
+                  "6. Este Issue se cerrará solo cuando el emparejamiento termine`n`n" +
+                  "El servidor expira en 1 hora."
 
-          **IP Tailscale:** ``$env:TS_IP``
-          **RDP:** ``${env:TS_IP}:3389`` (Usuario: Manuela / Password: Manu1234)
-
-          ### Como emparejar Moonlight
-
-          1. Abre Moonlight en tu celular
-          2. Añade un host manual con la IP: ``$env:TS_IP``
-          3. Moonlight te mostrará un PIN de 4 dígitos
-          4. **Comenta este Issue con el PIN (solo el número)**
-          5. El servidor lo detectará y emparejará automáticamente
-          6. Este Issue se cerrará solo cuando el emparejamiento termine
-
-          ⏱️ El servidor expira en 1 hora. Si tarda más, vuelve a lanzar el workflow.
-          "@ -replace "          ", ""
-
-          $issueJson = @{
-            title = $title
-            body  = $body
-          } | ConvertTo-Json
-
+          $issueJson = @{ title = $title; body = $body } | ConvertTo-Json
           $issue = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues" `
             -Method Post `
             -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" } `
@@ -186,11 +151,8 @@ jobs:
             -ContentType "application/json"
 
           echo "ISSUE_NUMBER=$($issue.number)" >> $env:GITHUB_ENV
-          Write-Host "Issue #$($issue.number) creado para recibir el PIN."
+          Write-Host "Issue #$($issue.number) creado."
 
-      # ─────────────────────────────────────────────
-      # 9. POLLING DEL ISSUE Y EMPAREJAMIENTO
-      # ─────────────────────────────────────────────
       - name: Esperar PIN y emparejar
         shell: pwsh
         env:
@@ -201,12 +163,17 @@ jobs:
           Write-Host "  Issue #$env:ISSUE_NUMBER"
           Write-Host "========================================="
           Write-Host "Añade la IP en Moonlight y comenta el PIN en el Issue."
-          Write-Host "Esperando PIN (máximo 30 minutos)..."
 
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
           $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER/comments"
 
+          # Basic auth manual para Apollo (esto arregla el 401)
+          $pair = "Manuela:Manu1234"
+          $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($pair))
+          $apolloAuth = "Basic $base64"
+
           $pinEnviado = $false
+          $procesados = @()
           $deadline = (Get-Date).AddMinutes(30)
 
           while (-not $pinEnviado -and (Get-Date) -lt $deadline) {
@@ -214,21 +181,24 @@ jobs:
             try {
               $comments = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
               foreach ($c in $comments) {
+                $cid = $c.id
+                if ($procesados -contains $cid) { continue }
                 $body = $c.body.Trim()
                 if ($body -match '^\d{4}$') {
+                  $procesados += $cid
                   Write-Host "PIN detectado: $body"
                   $payload = @{ pin = $body; name = "Moonlight-VE" } | ConvertTo-Json
                   try {
-                    Invoke-RestMethod -Uri "https://localhost:47990/api/pin" `
-                      -Method Post -SkipCertificateCheck `
-                      -Authentication Basic `
-                      -Credential (New-Object PSCredential("Manuela", (ConvertTo-SecureString "Manu1234" -AsPlainText -Force))) `
-                      -Body $payload -ContentType "application/json"
-                    Write-Host "PIN enviado a Apollo con exito."
+                    $resp = Invoke-RestMethod -Uri "https://localhost:47990/api/pin" `
+                      -Method Post `
+                      -SkipCertificateCheck `
+                      -Headers @{ Authorization = $apolloAuth } `
+                      -Body $payload `
+                      -ContentType "application/json"
+                    Write-Host "PIN enviado a Apollo. Respuesta: $resp"
                     $pinEnviado = $true
 
-                    # Comentar confirmación y cerrar el issue
-                    $confirm = @{ body = "✅ PIN recibido y enviado a Apollo. Moonlight debería estar emparejado. Puedes cerrar este Issue." } | ConvertTo-Json
+                    $confirm = @{ body = "PIN recibido y enviado a Apollo. Moonlight deberia estar emparejado." } | ConvertTo-Json
                     Invoke-RestMethod -Uri $url -Headers $headers -Method Post -Body $confirm -ContentType "application/json" | Out-Null
                     Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$env:ISSUE_NUMBER" `
                       -Headers $headers -Method Patch `
@@ -245,12 +215,9 @@ jobs:
           }
 
           if (-not $pinEnviado) {
-            Write-Warning "No se recibió PIN en 30 minutos. El servidor sigue activo; puedes seguir intentando desde RDP."
+            Write-Warning "No se recibio PIN en 30 minutos."
           }
 
-      # ─────────────────────────────────────────────
-      # 10. KEEP ALIVE
-      # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
         run: |
