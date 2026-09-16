@@ -34,7 +34,20 @@ jobs:
           Write-Host "Idioma, RDP y usuario listos."
 
       # ─────────────────────────────────────────────
-      # 2. DESCARGAR INSTALADORES EN PARALELO
+      # 2. INSTALAR VISUAL C++ REDISTRIBUTABLE
+      # ─────────────────────────────────────────────
+      - name: Instalar Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $vcUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $vcPath = "$env:TEMP\vc_redist.x64.exe"
+          Invoke-WebRequest -Uri $vcUrl -OutFile $vcPath
+          Start-Process -FilePath $vcPath -ArgumentList "/install", "/quiet", "/norestart" -Wait
+          Remove-Item $vcPath -Force
+          Write-Host "Visual C++ Redistributable instalado."
+
+      # ─────────────────────────────────────────────
+      # 3. DESCARGAR INSTALADORES EN PARALELO
       # ─────────────────────────────────────────────
       - name: Descargar instaladores en paralelo
         shell: pwsh
@@ -44,11 +57,11 @@ jobs:
           Wait-Job $job1, $job2 -Timeout 180 | Out-Null
           Receive-Job $job1, $job2
           Remove-Job $job1, $job2 -Force
-          Write-Host "Descargas completadas:"
+          Write-Host "Descargas completadas."
           Get-Item "$env:TEMP\ts.msi", "$env:TEMP\vigem.exe" | Select-Object Name, Length
 
       # ─────────────────────────────────────────────
-      # 3. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
+      # 4. INSTALAR TAILSCALE + ViGEmBus EN PARALELO
       # ─────────────────────────────────────────────
       - name: Instalar Tailscale y ViGEmBus
         shell: pwsh
@@ -60,7 +73,7 @@ jobs:
           Write-Host "Tailscale y ViGEmBus instalados."
 
       # ─────────────────────────────────────────────
-      # 4. CONECTAR TAILSCALE
+      # 5. CONECTAR TAILSCALE
       # ─────────────────────────────────────────────
       - name: Conectar Tailscale
         shell: pwsh
@@ -74,7 +87,7 @@ jobs:
           Write-Host "IP Tailscale: $ip"
 
       # ─────────────────────────────────────────────
-      # 5. INSTALAR APOLLO
+      # 6. INSTALAR APOLLO
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
@@ -83,7 +96,7 @@ jobs:
           Write-Host "Apollo instalado."
 
       # ─────────────────────────────────────────────
-      # 6. LOCALIZAR EJECUTABLE
+      # 7. LOCALIZAR EJECUTABLE
       # ─────────────────────────────────────────────
       - name: Localizar ejecutable de Apollo
         shell: pwsh
@@ -99,7 +112,7 @@ jobs:
           Write-Host "Ejecutable: $exe"
 
       # ─────────────────────────────────────────────
-      # 7. CONFIGURAR APOLLO
+      # 8. CONFIGURAR APOLLO
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -125,9 +138,9 @@ jobs:
           Write-Host "Configuración escrita."
 
       # ─────────────────────────────────────────────
-      # 8. CONFIGURAR FIREWALL (EXPLÍCITO)
+      # 9. CONFIGURAR FIREWALL
       # ─────────────────────────────────────────────
-      - name: Configurar firewall (explícito)
+      - name: Configurar firewall
         shell: pwsh
         run: |
           Remove-NetFirewallRule -DisplayName "ApolloTCP47990" -EA SilentlyContinue
@@ -144,12 +157,10 @@ jobs:
             Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
             New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
-
-          Write-Host "Reglas de firewall verificadas:"
-          Get-NetFirewallRule -DisplayName "Apollo*" | Format-Table Name, Enabled, Direction, Action -AutoSize
+          Write-Host "Firewall configurado."
 
       # ─────────────────────────────────────────────
-      # 9. OPTIMIZAR CPU
+      # 10. OPTIMIZAR CPU
       # ─────────────────────────────────────────────
       - name: Optimizar CPU
         shell: pwsh
@@ -161,7 +172,7 @@ jobs:
           Write-Host "Optimizaciones de CPU aplicadas."
 
       # ─────────────────────────────────────────────
-      # 10. INICIAR APOLLO
+      # 11. INICIAR APOLLO
       # ─────────────────────────────────────────────
       - name: Iniciar Apollo
         shell: pwsh
@@ -193,7 +204,7 @@ jobs:
           if (-not $ok) { Write-Warning "El puerto 47990 nunca se abrió." }
 
       # ─────────────────────────────────────────────
-      # 11. DIAGNÓSTICO DE CONECTIVIDAD
+      # 12. DIAGNÓSTICO DE CONECTIVIDAD
       # ─────────────────────────────────────────────
       - name: Diagnóstico de conectividad
         shell: pwsh
@@ -212,17 +223,13 @@ jobs:
             Write-Host "Conexion via Tailscale: OK ($($r.StatusCode))"
           } catch {
             Write-Warning "Conexion via Tailscale fallo: $_"
-            Write-Host "El firewall o Tailscale estan bloqueando el puerto 47990."
           }
 
           Write-Host "--- Estado del puerto ---"
           Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue | Format-Table LocalAddress, LocalPort, State, OwningProcess -AutoSize
 
-          Write-Host "--- Reglas de firewall Apollo ---"
-          Get-NetFirewallRule -DisplayName "Apollo*" -EA SilentlyContinue | Format-Table Name, Enabled, Direction, Action -AutoSize
-
       # ─────────────────────────────────────────────
-      # 12. MOSTRAR DATOS DE CONEXIÓN
+      # 13. MOSTRAR DATOS DE CONEXIÓN
       # ─────────────────────────────────────────────
       - name: Mostrar datos de conexión
         shell: pwsh
@@ -251,7 +258,7 @@ jobs:
           Write-Host ""
 
       # ─────────────────────────────────────────────
-      # 13. MANTENER VIVO
+      # 14. MANTENER VIVO
       # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
