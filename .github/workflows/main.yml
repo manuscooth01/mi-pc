@@ -99,7 +99,7 @@ jobs:
           Write-Host "Ejecutable: $exe"
 
       # ─────────────────────────────────────────────
-      # 7. CONFIGURAR APOLLO (opciones válidas)
+      # 7. CONFIGURAR APOLLO
       # ─────────────────────────────────────────────
       - name: Configurar Apollo
         shell: pwsh
@@ -125,29 +125,43 @@ jobs:
           Write-Host "Configuración escrita."
 
       # ─────────────────────────────────────────────
-      # 8. OPTIMIZACIONES + FIREWALL EN PARALELO
+      # 8. CONFIGURAR FIREWALL (EXPLÍCITO)
       # ─────────────────────────────────────────────
-      - name: Optimizar CPU y abrir firewall
+      - name: Configurar firewall (explícito)
         shell: pwsh
         run: |
-          $j1 = Start-Job {
-            foreach ($s in @("SysMain", "WSearch", "DiagTrack")) { Stop-Service $s -Force -EA SilentlyContinue }
+          Remove-NetFirewallRule -DisplayName "ApolloTCP47990" -EA SilentlyContinue
+          Remove-NetFirewallRule -DisplayName "ApolloUDP47990" -EA SilentlyContinue
+
+          New-NetFirewallRule -DisplayName "ApolloTCP47990" -Direction Inbound -Protocol TCP -LocalPort 47990 -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
+          New-NetFirewallRule -DisplayName "ApolloUDP47990" -Direction Inbound -Protocol UDP -LocalPort 47990 -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
+
+          foreach ($p in @(47984, 47989, 48010)) {
+            Remove-NetFirewallRule -DisplayName "ApolloTCP$p" -EA SilentlyContinue
+            New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
-          $j2 = Start-Job {
-            foreach ($p in @(47984, 47989, 47990, 48010)) {
-              New-NetFirewallRule -DisplayName "ApolloTCP$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
-            }
-            foreach ($p in @(47998, 47999, 48000, 48002, 48010)) {
-              New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -EA SilentlyContinue | Out-Null
-            }
+          foreach ($p in @(47998, 47999, 48000, 48002, 48010)) {
+            Remove-NetFirewallRule -DisplayName "ApolloUDP$p" -EA SilentlyContinue
+            New-NetFirewallRule -DisplayName "ApolloUDP$p" -Direction Inbound -Protocol UDP -LocalPort $p -Action Allow -Enabled True -Profile Any -EA SilentlyContinue | Out-Null
           }
-          $j1, $j2 | Wait-Job -Timeout 60 | Out-Null
-          $j1, $j2 | Remove-Job -Force
-          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          Write-Host "Optimizaciones y firewall listos."
+
+          Write-Host "Reglas de firewall verificadas:"
+          Get-NetFirewallRule -DisplayName "Apollo*" | Format-Table Name, Enabled, Direction, Action -AutoSize
 
       # ─────────────────────────────────────────────
-      # 9. INICIAR APOLLO
+      # 9. OPTIMIZAR CPU
+      # ─────────────────────────────────────────────
+      - name: Optimizar CPU
+        shell: pwsh
+        run: |
+          foreach ($s in @("SysMain", "WSearch", "DiagTrack")) {
+            Stop-Service $s -Force -EA SilentlyContinue
+          }
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          Write-Host "Optimizaciones de CPU aplicadas."
+
+      # ─────────────────────────────────────────────
+      # 10. INICIAR APOLLO
       # ─────────────────────────────────────────────
       - name: Iniciar Apollo
         shell: pwsh
@@ -179,38 +193,70 @@ jobs:
           if (-not $ok) { Write-Warning "El puerto 47990 nunca se abrió." }
 
       # ─────────────────────────────────────────────
-      # 10. VERIFICAR WEB UI (HTTPS + certificado autofirmado)
+      # 11. DIAGNÓSTICO DE CONECTIVIDAD
       # ─────────────────────────────────────────────
-      - name: Verificar Apollo
+      - name: Diagnóstico de conectividad
         shell: pwsh
         run: |
-          $ok = $false
-          for ($i = 0; $i -lt 12; $i++) {
-            try {
-              $r = Invoke-WebRequest "https://localhost:47990" -UseBasicParsing -TimeoutSec 5 -SkipCertificateCheck
-              if ($r.StatusCode -eq 200) { $ok = $true; break }
-            } catch { Start-Sleep 5 }
+          Write-Host "--- Prueba local ---"
+          try {
+            $r = Invoke-WebRequest "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 5
+            Write-Host "Conexion local: OK ($($r.StatusCode))"
+          } catch {
+            Write-Warning "Conexion local fallo: $_"
           }
-          if ($ok) { Write-Host "Apollo Web UI: OK" }
-          else { Write-Warning "Web UI aún no responde tras 60s" }
 
-          Write-Host ""
-          Write-Host "=================================="
-          Write-Host "IP Tailscale : $env:TS_IP"
-          Write-Host "Web UI       : https://${env:TS_IP}:47990"
-          Write-Host "Usuario      : Manuela"
-          Write-Host "Password     : Manu1234"
-          Write-Host "RDP          : ${env:TS_IP}:3389"
-          Write-Host "Idioma       : Espanol (Venezuela)"
-          Write-Host "=================================="
-          Write-Host ""
-          Write-Host "IMPORTANTE: La Web UI usa HTTPS con certificado autofirmado."
-          Write-Host "El navegador te avisara. Acepta la excepcion y continua."
+          Write-Host "--- Prueba via Tailscale IP ---"
+          try {
+            $r = Invoke-WebRequest "https://$env:TS_IP:47990" -SkipCertificateCheck -TimeoutSec 5
+            Write-Host "Conexion via Tailscale: OK ($($r.StatusCode))"
+          } catch {
+            Write-Warning "Conexion via Tailscale fallo: $_"
+            Write-Host "El firewall o Tailscale estan bloqueando el puerto 47990."
+          }
+
+          Write-Host "--- Estado del puerto ---"
+          Get-NetTCPConnection -LocalPort 47990 -EA SilentlyContinue | Format-Table LocalAddress, LocalPort, State, OwningProcess -AutoSize
+
+          Write-Host "--- Reglas de firewall Apollo ---"
+          Get-NetFirewallRule -DisplayName "Apollo*" -EA SilentlyContinue | Format-Table Name, Enabled, Direction, Action -AutoSize
 
       # ─────────────────────────────────────────────
-      # 11. MANTENER VIVO
+      # 12. MOSTRAR DATOS DE CONEXIÓN
+      # ─────────────────────────────────────────────
+      - name: Mostrar datos de conexión
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "========================================="
+          Write-Host "  DATOS DE CONEXION"
+          Write-Host "========================================="
+          Write-Host "  IP Tailscale : $env:TS_IP"
+          Write-Host "  Web UI       : https://${env:TS_IP}:47990"
+          Write-Host "  Usuario      : Manuela"
+          Write-Host "  Password     : Manu1234"
+          Write-Host "  RDP          : ${env:TS_IP}:3389"
+          Write-Host "  Idioma       : Espanol (Venezuela)"
+          Write-Host "========================================="
+          Write-Host ""
+          Write-Host "MOONLIGHT: Añade host manual con IP $env:TS_IP"
+          Write-Host ""
+          Write-Host "WEB UI: Abre en el navegador del movil:"
+          Write-Host "  https://${env:TS_IP}:47990"
+          Write-Host "  Acepta el aviso de certificado autofirmado."
+          Write-Host "  Usuario: Manuela / Password: Manu1234"
+          Write-Host "  Ahi veras el PIN que Moonlight te pida."
+          Write-Host ""
+          Write-Host "IMPORTANTE: NO canceles este workflow mientras lo uses."
+          Write-Host ""
+
+      # ─────────────────────────────────────────────
+      # 13. MANTENER VIVO
       # ─────────────────────────────────────────────
       - name: Keep alive
         shell: pwsh
         run: |
-          while ($true) { Start-Sleep 300 }
+          while ($true) {
+            Write-Host "[$(Get-Date)] Apollo activo - NO canceles el workflow si lo estas usando"
+            Start-Sleep 300
+          }
