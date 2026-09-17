@@ -1,33 +1,16 @@
-name: PC Potente en la Nube (RDP + Tailscale)
+name: PC Gamer en la Nube (Apollo + Tailscale)
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-machine:
+  cloud-pc:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
       # ─────────────────────────────────────────────
-      # 1. HABILITAR RDP Y DESACTIVAR NLA
-      # ─────────────────────────────────────────────
-      - name: Habilitar Escritorio Remoto
-        shell: pwsh
-        run: |
-          # Permitir conexiones RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          # Desactivar autenticación a nivel de red (NLA) para permitir conexión desde cualquier cliente
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          # Abrir puerto 3389 en el firewall
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 | Out-Null
-          Restart-Service TermService -Force
-          Write-Host "RDP habilitado correctamente."
-
-      # ─────────────────────────────────────────────
-      # 2. CREAR USUARIO PERSONALIZADO (OPCIONAL)
+      # 1. CREAR USUARIO PERSONALIZADO
       # ─────────────────────────────────────────────
       - name: Crear usuario personalizado
         shell: pwsh
@@ -40,11 +23,32 @@ jobs:
           }
           New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $user
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           Write-Host "Usuario $user creado con contraseña $pass"
 
       # ─────────────────────────────────────────────
-      # 3. INSTALAR TAILSCALE Y CONECTAR
+      # 2. INSTALAR APOLLO (Servidor para Artemis/Diana)
+      # ─────────────────────────────────────────────
+      - name: Instalar Apollo
+        shell: pwsh
+        run: |
+          $apolloUrl = "https://github.com/ClassicOldSong/Apollo/releases/latest/download/Apollo-Setup.exe"
+          $installer = "$env:TEMP\Apollo-Setup.exe"
+          Invoke-WebRequest -Uri $apolloUrl -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+          Remove-Item $installer -Force
+          
+          # Asegurar que el servicio de Apollo esté corriendo
+          Start-Sleep -Seconds 5
+          $service = Get-Service -Name "Apollo" -ErrorAction SilentlyContinue
+          if ($service) {
+            Start-Service -Name "Apollo"
+            Write-Host "Servicio Apollo iniciado."
+          } else {
+            Write-Host "Advertencia: No se encontró el servicio Apollo. Puede que se inicie al reiniciar."
+          }
+
+      # ─────────────────────────────────────────────
+      # 3. INSTALAR Y CONECTAR TAILSCALE
       # ─────────────────────────────────────────────
       - name: Instalar y conectar Tailscale
         shell: pwsh
@@ -72,91 +76,41 @@ jobs:
           Write-Host "IP Tailscale asignada: $ip"
 
       # ─────────────────────────────────────────────
-      # 4. OPTIMIZACIONES DE RDP (60 FPS + ACELERACIÓN)
+      # 4. CONFIGURAR FIREWALL PARA APOLLO
       # ─────────────────────────────────────────────
-      - name: Aplicar optimizaciones de RDP
+      - name: Configurar firewall para Apollo
         shell: pwsh
         run: |
-          # --- Habilitar transporte UDP y H.264 (mejor rendimiento) ---
-          $tsPolicy = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
-          if (-not (Test-Path $tsPolicy)) { New-Item -Path $tsPolicy -Force | Out-Null }
-
-          # Usar UDP y TCP (UDP para baja latencia, TCP como respaldo)
-          Set-ItemProperty -Path $tsPolicy -Name "SelectTransport" -Value 0 -Type DWord -Force
-          # Preferir codificación por hardware H.264
-          Set-ItemProperty -Path $tsPolicy -Name "AVCHardwareEncodePreferred" -Value 1 -Type DWord -Force
-          # Modo de color AVC 444 (máxima calidad)
-          Set-ItemProperty -Path $tsPolicy -Name "AVC444Mode" -Value 2 -Type DWord -Force
-
-          # --- Desbloquear 60 FPS (DWMFRAMEINTERVAL) ---
-          $dwmPath = "HKLM:\SOFTWARE\Microsoft\Windows\Dwm"
-          Set-ItemProperty -Path $dwmPath -Name "DWMFRAMEINTERVAL" -Value 0 -Type DWord -Force
-
-          # --- Optimizaciones de red y sistema ---
-          # Reducir la latencia de multimedia
-          $sysProfile = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
-          Set-ItemProperty -Path $sysProfile -Name "SystemResponsiveness" -Value 0 -Type DWord -Force
-
-          # Deshabilitar control de flujo para RDP
-          $winStations = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
-          Set-ItemProperty -Path $winStations -Name "FlowControlDisplayBandwidth" -Value 0 -Type DWord -Force
-          Set-ItemProperty -Path $winStations -Name "FlowControlChannelBandwidth" -Value 0 -Type DWord -Force
-
-          # --- Habilitar RDP Multipath (mayor estabilidad) ---
-          $rdpCloud = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\RdpCloudStackSettings"
-          if (-not (Test-Path $rdpCloud)) { New-Item -Path $rdpCloud -Force | Out-Null }
-          Set-ItemProperty -Path $rdpCloud -Name "SmilesV3ActivationThreshold" -Value 100 -Type DWord -Force
-
-          # --- Optimizar la pila de red de Windows ---
-          # Deshabilitar throttling de red
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex" -Name "NetworkThrottlingIndex" -Value 0xffffffff -Type DWord -Force -ErrorAction SilentlyContinue
-
-          Write-Host "Optimizaciones de RDP aplicadas (60 FPS, H.264, Multipath)."
-
-      # ─────────────────────────────────────────────
-      # 5. ABRIR PUERTOS ADICIONALES PARA RDP MULTIPATH
-      # ─────────────────────────────────────────────
-      - name: Configurar firewall para RDP Multipath
-        shell: pwsh
-        run: |
-          # Puertos UDP para RDP Shortpath y Multipath
-          $udpPorts = @(3390, 3478, 3479)
-          foreach ($port in $udpPorts) {
-            netsh advfirewall firewall add rule name="RDP-UDP-$port" dir=in action=allow protocol=UDP localport=$port | Out-Null
+          # Puertos estándar de Sunshine/Apollo
+          $ports = @(47984, 47989, 47990, 48010)
+          foreach ($port in $ports) {
+            netsh advfirewall firewall add rule name="Apollo-TCP-$port" dir=in action=allow protocol=TCP localport=$port | Out-Null
+            netsh advfirewall firewall add rule name="Apollo-UDP-$port" dir=in action=allow protocol=UDP localport=$port | Out-Null
           }
-          Write-Host "Puertos UDP abiertos para RDP Multipath."
+          Write-Host "Puertos de Apollo abiertos en el firewall."
 
       # ─────────────────────────────────────────────
-      # 6. REINICIAR SERVICIO RDP PARA APLICAR CAMBIOS
-      # ─────────────────────────────────────────────
-      - name: Reiniciar servicio de Escritorio Remoto
-        shell: pwsh
-        run: |
-          Restart-Service TermService -Force
-          Write-Host "Servicio de Escritorio Remoto reiniciado."
-
-      # ─────────────────────────────────────────────
-      # 7. MOSTRAR DATOS DE CONEXIÓN Y MANTENER ACTIVO
+      # 5. MOSTRAR DATOS Y MANTENER PC ACTIVA
       # ─────────────────────────────────────────────
       - name: Mostrar datos y mantener PC activa
         shell: pwsh
         run: |
           Write-Host ""
           Write-Host "========================================="
-          Write-Host "   PC POTENTE EN LA NUBE - LISTA"
+          Write-Host "   PC GAMER EN LA NUBE - LISTA"
           Write-Host "========================================="
-          Write-Host "  IP Tailscale : $env:TS_IP"
+          Write-Host "  IP Tailscale  : $env:TS_IP"
+          Write-Host "  Web UI Apollo : http://$env:TS_IP:47990"
           Write-Host "  Usuario       : Manuela"
           Write-Host "  Contraseña    : Manu1234"
-          Write-Host "  Usuario admin : runneradmin (por defecto)"
-          Write-Host "  RDP           : $env:TS_IP:3389"
           Write-Host "========================================="
           Write-Host ""
           Write-Host "INSTRUCCIONES PARA CONECTARTE:"
-          Write-Host "1. Abre Windows App en tu celular."
+          Write-Host "1. Abre Artemis (o Diana) en tu Android."
           Write-Host "2. Añade una PC con la IP: $env:TS_IP"
-          Write-Host "3. Usa el usuario: Manuela  |  Contraseña: Manu1234"
-          Write-Host "4. ¡Disfruta de tu PC potente!"
+          Write-Host "3. Abre la Web UI de Apollo en tu navegador: http://$env:TS_IP:47990"
+          Write-Host "4. Copia el PIN que aparece en la Web UI y pégalo en Artemis."
+          Write-Host "5. ¡Disfruta de tu PC potente con mando táctil!"
           Write-Host ""
           Write-Host "IMPORTANTE: No canceles este workflow o la PC se apagará."
           Write-Host "La PC se mantendrá activa durante 6 horas (límite de GitHub)."
