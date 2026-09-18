@@ -80,6 +80,26 @@ jobs:
           Write-Host "Servicio ApolloService detenido para restaurar el estado."
 
       # ─────────────────────────────────────────────
+      # 2b. INSTALAR SERVICIO WINDOWS APOLLO
+      # ─────────────────────────────────────────────
+      # El instalador NSIS silencioso no registra el servicio
+      # ApolloService; es necesario ejecutar install-service.bat
+      # después. Ver: https://github.com/ClassicOldSong/Apollo/issues/971
+      - name: Instalar servicio Apollo Windows
+        shell: pwsh
+        run: |
+          $bat = "$env:ProgramFiles\Apollo\scripts\install-service.bat"
+          if (Test-Path $bat) {
+            Write-Host "Instalando servicio ApolloWindows..."
+            & $bat
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "install-service.bat returned $LASTEXITCODE"
+            }
+          } else {
+            Write-Warning "No se encontró install-service.bat; el servicio puede ya estar instalado."
+          }
+
+      # ─────────────────────────────────────────────
       # 3. RESTAURAR ESTADO EMPAREJADO
       #    (conserva el emparejamiento del celular: el PIN solo
       #     se pide la PRIMERA vez que se ejecuta)
