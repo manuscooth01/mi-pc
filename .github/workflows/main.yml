@@ -89,13 +89,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           # Identidad del host + dispositivos emparejados + ajustes
+          # + identidad de Tailscale (misma IP en cada ejecución)
           path: |
             C:\Program Files\Apollo\config\sunshine_state.json
             C:\Program Files\Apollo\config\sunshine.conf
             C:\Program Files\Apollo\config\apps.json
             C:\Program Files\Apollo\config\credentials
-          # Clave nueva en cada ejecución; restore-keys recupera la más reciente
-          key: apollo-state-${{ github.run_id }}
+            C:\ProgramData\Tailscale
+          # Clave nueva en cada intento (run_attempt) porque las cachés son
+          # inmutables: re-ejecutar el mismo run no puede reservar su clave.
+          # restore-keys recupera siempre la más reciente.
+          key: apollo-state-${{ github.run_id }}-a${{ github.run_attempt }}
           restore-keys: apollo-state-
 
       # ─────────────────────────────────────────────
@@ -145,15 +149,63 @@ jobs:
             throw "Falta el secret TAILSCALE_AUTH_KEY en el repositorio."
           }
 
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          # Última versión estable: una versión fija de 2024 (1.82.0) se
+          # quedaba colgada instalándose en Windows Server 2025 sin log.
+          $ver = (Invoke-RestMethod "https://pkgs.tailscale.com/stable/?mode=json&os=windows").Version
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$ver-amd64.msi"
+          Write-Host "Descargando Tailscale $ver..."
           $tsMsi = "$env:TEMP\tailscale.msi"
+          $tsLog = "$env:TEMP\tailscale-install.log"
           Invoke-WebRequest -Uri $tsUrl -OutFile $tsMsi
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$tsMsi`"", "/quiet", "/norestart" -Wait
+
+          # Instalación silenciosa con log detallado y límite de 5 minutos
+          # (antes podía quedarse colgada 6 horas sin producir ningún log).
+          $proc = Start-Process msiexec.exe -ArgumentList "/i", "`"$tsMsi`"", "/quiet", "/norestart", "/L*v", "`"$tsLog`"" -PassThru
+          if (-not $proc.WaitForExit(300000)) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Get-Content $tsLog -Tail 30 -ErrorAction SilentlyContinue
+            throw "La instalación de Tailscale no terminó en 5 minutos."
+          }
+          Write-Host "Instalación terminada (código de salida $($proc.ExitCode))."
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            Get-Content $tsLog -Tail 30 -ErrorAction SilentlyContinue
+            throw "La instalación de Tailscale falló (código $($proc.ExitCode))."
+          }
           Remove-Item $tsMsi -Force
 
-          $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          # Hostname fijo para mantener la misma IP en cada ejecución
-          & $tsExe up --authkey=$env:TS_AUTHKEY --hostname=pc-potente-github
+          # Localizar tailscale.exe (la carpeta varía según la versión)
+          $tsExe = @(
+            "$env:ProgramFiles\Tailscale\tailscale.exe",
+            "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe",
+            "$env:ProgramFiles\Tailscale IPN\tailscale.exe",
+            "${env:ProgramFiles(x86)}\Tailscale IPN\tailscale.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $tsExe) { throw "No se encontró tailscale.exe tras la instalación." }
+          Write-Host "Tailscale instalado en: $tsExe"
+
+          # El servicio debe existir y estar corriendo antes de 'up'
+          if (-not (Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue)) {
+            throw "El servicio 'Tailscale' no existe tras la instalación."
+          }
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          Write-Host "Servicio Tailscale: $((Get-Service -Name 'Tailscale').Status)"
+
+          # Conectar: si la identidad persistida en caché sigue autenticada
+          # no hace falta la clave; si no, se autentica con límite de 2 min.
+          # Antes, si la clave fallaba, 'up' esperaba un login por navegador
+          # que nunca llegaba y el paso se colgaba 6 horas en silencio.
+          $ipn = $null
+          try { $ipn = (& $tsExe status --json 2>$null) | ConvertFrom-Json } catch {}
+          if ($ipn.BackendState -eq "Running") {
+            Write-Host "Tailscale ya estaba autenticado (identidad persistida en caché)."
+          } else {
+            Write-Host "Autenticando con el auth key..."
+            & $tsExe up --authkey=$env:TS_AUTHKEY --hostname=pc-potente-github --timeout=120s
+            if ($LASTEXITCODE -ne 0) {
+              & $tsExe status 2>&1 | Write-Host
+              throw "tailscale up falló (código $LASTEXITCODE). Crea una clave REUTILIZABLE y no caducada en https://login.tailscale.com/admin/settings/keys y actualiza el secret TAILSCALE_AUTH_KEY."
+            }
+          }
 
           # Esperar a que se asigne la IP
           $ip = $null
@@ -165,6 +217,7 @@ jobs:
           if (-not $ip) { throw "No se pudo obtener la IP de Tailscale." }
           "TS_IP=$ip" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
           Write-Host "IP Tailscale asignada: $ip"
+          Write-Host "Versión: $(& $tsExe version)"
 
       # ─────────────────────────────────────────────
       # 6. CONFIGURAR FIREWALL PARA APOLLO
@@ -208,7 +261,7 @@ jobs:
           Write-Host ""
           Write-Host "INSTRUCCIONES PARA CONECTARTE:"
           Write-Host "1. Abre Artemis (o Diana) en tu Android."
-          Write-Host "2. Añade una PC con la IP: $env:TS_IP"
+          Write-Host "2. Añade una PC con la IP: $env:TS_IP (se mantiene entre ejecuciones)"
           Write-Host "3. SOLO LA PRIMERA VEZ: empareja. Artemis mostrará un PIN de 4"
           Write-Host "   dígitos; escríbelo en la sección 'PIN' de la Web UI ($uiUrl)."
           Write-Host "   Las siguientes ejecuciones conectarán directamente SIN PIN."
@@ -219,7 +272,8 @@ jobs:
           Write-Host "de emparejamiento se guarda solo al final de la sesión."
           Write-Host ""
           Write-Host "OJO: si pasas más de 7 días seguidos sin ejecutar el workflow, la"
-          Write-Host "caché expira y tendrás que emparejar de nuevo (una sola vez)."
+          Write-Host "caché expira: tendrás que emparejar de nuevo (una sola vez) y la"
+          Write-Host "IP de Tailscale cambiará (actualízala en Artemis)."
           Write-Host ""
 
           # Bucle para mantener el runner activo (~5,5 horas para dejar
@@ -237,16 +291,17 @@ jobs:
           }
 
       # ─────────────────────────────────────────────
-      # 8. GUARDAR ESTADO EMPAREJADO
-      #    (se ejecuta incluso si cancelas la sesión,
-      #     para que el celular no vuelva a pedir PIN)
+      # 8. GUARDAR ESTADO EMPAREJADO + IDENTIDAD DE TAILSCALE
+      #    (se ejecuta incluso si cancelas la sesión, para que
+      #     el celular no vuelva a pedir PIN y la IP no cambie)
       # ─────────────────────────────────────────────
-      - name: Detener Apollo
+      - name: Detener servicios
         if: always()
         shell: pwsh
         run: |
           Stop-Service -Name "ApolloService" -ErrorAction SilentlyContinue
-          Write-Host "Servicio ApolloService detenido para guardar el estado."
+          Stop-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          Write-Host "Servicios detenidos para guardar el estado."
 
       - name: Guardar estado emparejado de Apollo
         if: always()
@@ -258,4 +313,5 @@ jobs:
             C:\Program Files\Apollo\config\sunshine.conf
             C:\Program Files\Apollo\config\apps.json
             C:\Program Files\Apollo\config\credentials
-          key: apollo-state-${{ github.run_id }}
+            C:\ProgramData\Tailscale
+          key: apollo-state-${{ github.run_id }}-a${{ github.run_attempt }}
