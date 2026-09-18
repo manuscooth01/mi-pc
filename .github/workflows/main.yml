@@ -244,7 +244,9 @@ jobs:
       - name: Mostrar datos y mantener PC activa
         shell: pwsh
         run: |
-          $uiUrl = "https://$env:TS_IP:47990"
+          # ${env:TS_IP} con llaves: sin ellas, PowerShell parsearía
+          # "$env:TS_IP:47990" como una única variable inexistente.
+          $uiUrl = "https://${env:TS_IP}:47990"
 
           Write-Host ""
           Write-Host "========================================="
