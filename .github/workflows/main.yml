@@ -3,10 +3,21 @@ name: PC Gamer en la Nube (Apollo + Tailscale)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Credenciales del usuario de Windows y de la Web UI de Apollo.
+# NOTA: en un repositorio público la contraseña de fallback es visible.
+# Para ocultarla: crea el secret PC_PASSWORD y se usará automáticamente
+# (GitHub la enmascara como *** en los logs).
+env:
+  PC_USER: Manuela
+  PC_PASS: ${{ secrets.PC_PASSWORD || 'Manu1234' }}
+
 jobs:
   cloud-pc:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360   # límite real de GitHub Actions: 6 horas
 
     steps:
       # ─────────────────────────────────────────────
@@ -15,44 +26,125 @@ jobs:
       - name: Crear usuario personalizado
         shell: pwsh
         run: |
-          $user = "Manuela"
-          $pass = "Manu1234"
-          $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
+          $user = $env:PC_USER
+          $securePass = ConvertTo-SecureString $env:PC_PASS -AsPlainText -Force
           if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
             Remove-LocalUser -Name $user
           }
           New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $user
-          Write-Host "Usuario $user creado con contraseña $pass"
+          Write-Host "Usuario '$user' creado."
 
       # ─────────────────────────────────────────────
       # 2. INSTALAR APOLLO (Servidor para Artemis/Diana)
       # ─────────────────────────────────────────────
       - name: Instalar Apollo
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $apolloUrl = "https://github.com/ClassicOldSong/Apollo/releases/latest/download/Apollo-Setup.exe"
-          $installer = "$env:TEMP\Apollo-Setup.exe"
-          Invoke-WebRequest -Uri $apolloUrl -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
-          Remove-Item $installer -Force
-          
-          # Asegurar que el servicio de Apollo esté corriendo
-          Start-Sleep -Seconds 5
-          $service = Get-Service -Name "Apollo" -ErrorAction SilentlyContinue
-          if ($service) {
-            Start-Service -Name "Apollo"
-            Write-Host "Servicio Apollo iniciado."
-          } else {
-            Write-Host "Advertencia: No se encontró el servicio Apollo. Puede que se inicie al reiniciar."
+          # El nombre del instalador incluye la versión (p.ej. Apollo-0.4.6.exe),
+          # por lo que se localiza dinámicamente en la última release.
+          $release = gh api repos/ClassicOldSong/Apollo/releases/latest | ConvertFrom-Json
+          $asset = $release.assets |
+            Where-Object { $_.name -match '^Apollo-[\d.]+\.exe$' } |
+            Select-Object -First 1
+          if (-not $asset) {
+            throw "No se encontró el instalador .exe en la release $($release.tag_name)."
           }
 
+          Write-Host "Descargando $($asset.name) (release $($release.tag_name))..."
+          $installer = "$env:TEMP\apollo-setup.exe"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+          Remove-Item $installer -Force
+
+          # El instalador NSIS en modo silencioso ya configura automáticamente:
+          # driver de pantalla virtual SudoVDA, driver de mando ViGEmBus,
+          # reglas de firewall para sunshine.exe y el servicio ApolloService.
+          $sunshine = "$env:ProgramFiles\Apollo\sunshine.exe"
+          if (-not (Test-Path $sunshine)) {
+            throw "No se encontró sunshine.exe en '$env:ProgramFiles\Apollo'."
+          }
+
+          Start-Sleep -Seconds 5
+          $svc = Get-Service -Name "ApolloService" -ErrorAction SilentlyContinue
+          if ($svc -and $svc.Status -ne "Running") {
+            Start-Service -Name "ApolloService"
+          }
+          Write-Host "Servicio ApolloService: $((Get-Service -Name 'ApolloService' -ErrorAction SilentlyContinue).Status)"
+
+          # Se detiene para restaurar el estado emparejado con seguridad
+          # (se vuelve a arrancar en el paso 4).
+          Stop-Service -Name "ApolloService" -ErrorAction SilentlyContinue
+          Write-Host "Servicio ApolloService detenido para restaurar el estado."
+
       # ─────────────────────────────────────────────
-      # 3. INSTALAR Y CONECTAR TAILSCALE
+      # 3. RESTAURAR ESTADO EMPAREJADO
+      #    (conserva el emparejamiento del celular: el PIN solo
+      #     se pide la PRIMERA vez que se ejecuta)
+      # ─────────────────────────────────────────────
+      - name: Restaurar estado emparejado de Apollo
+        id: restaurar
+        uses: actions/cache/restore@v4
+        with:
+          # Identidad del host + dispositivos emparejados + ajustes
+          path: |
+            C:\Program Files\Apollo\config\sunshine_state.json
+            C:\Program Files\Apollo\config\sunshine.conf
+            C:\Program Files\Apollo\config\apps.json
+            C:\Program Files\Apollo\config\credentials
+          # Clave nueva en cada ejecución; restore-keys recupera la más reciente
+          key: apollo-state-${{ github.run_id }}
+          restore-keys: apollo-state-
+
+      # ─────────────────────────────────────────────
+      # 4. CONFIGURAR CREDENCIALES DE LA WEB UI
+      # ─────────────────────────────────────────────
+      - name: Configurar credenciales de la Web UI
+        shell: pwsh
+        env:
+          RESTAURADO: ${{ steps.restaurar.outputs.cache-matched-key != '' }}
+        run: |
+          $sunshine = "$env:ProgramFiles\Apollo\sunshine.exe"
+
+          if ($env:RESTAURADO -eq "true") {
+            Write-Host "Estado de Apollo restaurado: tus dispositivos emparejados siguen siendo válidos."
+          } else {
+            Write-Host "No hay estado guardado todavía: la PRIMERA vez tendrás que emparejar con PIN."
+          }
+
+          # Definir credenciales con el servicio parado
+          # para evitar que las sobreescriba al arrancar
+          & $sunshine --creds $env:PC_USER $env:PC_PASS
+          Start-Service -Name "ApolloService"
+
+          # Esperar a que la Web UI (HTTPS, puerto 47990) responda
+          $deadline = (Get-Date).AddSeconds(90)
+          $ready = $false
+          while ((Get-Date) -lt $deadline -and -not $ready) {
+            try {
+              $null = Invoke-WebRequest -Uri "https://127.0.0.1:47990" -SkipCertificateCheck -SkipHttpErrorCheck -TimeoutSec 3
+              $ready = $true
+            } catch {
+              Start-Sleep -Seconds 3
+            }
+          }
+          if ($ready) { Write-Host "Web UI de Apollo activa en el puerto 47990." }
+          else { Write-Warning "La Web UI de Apollo no responde aún en el puerto 47990." }
+
+      # ─────────────────────────────────────────────
+      # 5. INSTALAR Y CONECTAR TAILSCALE
       # ─────────────────────────────────────────────
       - name: Instalar y conectar Tailscale
         shell: pwsh
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
+          if (-not $env:TS_AUTHKEY) {
+            throw "Falta el secret TAILSCALE_AUTH_KEY en el repositorio."
+          }
+
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $tsMsi = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $tsMsi
@@ -61,70 +153,109 @@ jobs:
 
           $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
           # Hostname fijo para mantener la misma IP en cada ejecución
-          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=pc-potente-github
+          & $tsExe up --authkey=$env:TS_AUTHKEY --hostname=pc-potente-github
 
           # Esperar a que se asigne la IP
           $ip = $null
           $retries = 0
           while (-not $ip -and $retries -lt 15) {
-            $ip = & $tsExe ip -4 2>$null
-            Start-Sleep 3
-            $retries++
+            $ip = "$(& $tsExe ip -4 2>$null)".Trim()
+            if (-not $ip) { $retries++; Start-Sleep 3 }
           }
-          if (-not $ip) { Write-Error "No se pudo obtener la IP de Tailscale"; exit 1 }
-          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+          if (-not $ip) { throw "No se pudo obtener la IP de Tailscale." }
+          "TS_IP=$ip" | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
           Write-Host "IP Tailscale asignada: $ip"
 
       # ─────────────────────────────────────────────
-      # 4. CONFIGURAR FIREWALL PARA APOLLO
+      # 6. CONFIGURAR FIREWALL PARA APOLLO
+      #    (refuerza las reglas que el instalador crea para sunshine.exe)
       # ─────────────────────────────────────────────
       - name: Configurar firewall para Apollo
         shell: pwsh
         run: |
-          # Puertos estándar de Sunshine/Apollo
-          $ports = @(47984, 47989, 47990, 48010)
-          foreach ($port in $ports) {
+          # TCP: 47984 (API HTTPS), 47989 (HTTP), 47990 (Web UI), 48010 (RTSP)
+          # UDP: 47998 (vídeo), 47999 (control), 48000 (audio), 48010 (RTSP)
+          $tcp = @(47984, 47989, 47990, 48010)
+          $udp = @(47998, 47999, 48000, 48010)
+          foreach ($port in $tcp) {
             netsh advfirewall firewall add rule name="Apollo-TCP-$port" dir=in action=allow protocol=TCP localport=$port | Out-Null
+          }
+          foreach ($port in $udp) {
             netsh advfirewall firewall add rule name="Apollo-UDP-$port" dir=in action=allow protocol=UDP localport=$port | Out-Null
           }
-          Write-Host "Puertos de Apollo abiertos en el firewall."
+          Write-Host "Reglas de firewall añadidas (TCP: $($tcp -join ', ') | UDP: $($udp -join ', '))."
 
       # ─────────────────────────────────────────────
-      # 5. MOSTRAR DATOS Y MANTENER PC ACTIVA
+      # 7. MOSTRAR DATOS Y MANTENER PC ACTIVA
       # ─────────────────────────────────────────────
       - name: Mostrar datos y mantener PC activa
         shell: pwsh
         run: |
+          $uiUrl = "https://$env:TS_IP:47990"
+
           Write-Host ""
           Write-Host "========================================="
           Write-Host "   PC GAMER EN LA NUBE - LISTA"
           Write-Host "========================================="
           Write-Host "  IP Tailscale  : $env:TS_IP"
-          Write-Host "  Web UI Apollo : http://$env:TS_IP:47990"
-          Write-Host "  Usuario       : Manuela"
-          Write-Host "  Contraseña    : Manu1234"
+          Write-Host "  Web UI Apollo : $uiUrl"
+          Write-Host "  Usuario       : $env:PC_USER"
+          Write-Host "  Contraseña    : $env:PC_PASS"
           Write-Host "========================================="
+          Write-Host ""
+          Write-Host "NOTA: el certificado HTTPS de Apollo es autofirmado; el navegador"
+          Write-Host "mostrará un aviso de seguridad que deberás aceptar."
           Write-Host ""
           Write-Host "INSTRUCCIONES PARA CONECTARTE:"
           Write-Host "1. Abre Artemis (o Diana) en tu Android."
           Write-Host "2. Añade una PC con la IP: $env:TS_IP"
-          Write-Host "3. Abre la Web UI de Apollo en tu navegador: http://$env:TS_IP:47990"
-          Write-Host "4. Copia el PIN que aparece en la Web UI y pégalo en Artemis."
-          Write-Host "5. ¡Disfruta de tu PC potente con mando táctil!"
+          Write-Host "3. SOLO LA PRIMERA VEZ: empareja. Artemis mostrará un PIN de 4"
+          Write-Host "   dígitos; escríbelo en la sección 'PIN' de la Web UI ($uiUrl)."
+          Write-Host "   Las siguientes ejecuciones conectarán directamente SIN PIN."
+          Write-Host "4. ¡Disfruta de tu PC potente con mando táctil!"
           Write-Host ""
           Write-Host "IMPORTANTE: No canceles este workflow o la PC se apagará."
-          Write-Host "La PC se mantendrá activa durante 6 horas (límite de GitHub)."
+          Write-Host "La PC se mantendrá activa ~5,5 horas (límite de GitHub) y el estado"
+          Write-Host "de emparejamiento se guarda solo al final de la sesión."
+          Write-Host ""
+          Write-Host "OJO: si pasas más de 7 días seguidos sin ejecutar el workflow, la"
+          Write-Host "caché expira y tendrás que emparejar de nuevo (una sola vez)."
           Write-Host ""
 
-          # Bucle para mantener el runner activo (máximo 6 horas)
+          # Bucle para mantener el runner activo (~5,5 horas para dejar
+          # margen al guardado final del estado emparejado).
           $startTime = Get-Date
-          $maxHours = 6
+          $maxHours = 5.5
           while ($true) {
             $elapsed = (Get-Date) - $startTime
             if ($elapsed.TotalHours -ge $maxHours) {
-              Write-Host "Se alcanzó el límite de 6 horas. Cerrando sesión..."
+              Write-Host "Se alcanzó el límite de tiempo. Cerrando sesión..."
               break
             }
             Write-Host "[$(Get-Date)] PC activa - Tiempo transcurrido: $([math]::Round($elapsed.TotalMinutes, 1)) minutos"
             Start-Sleep 300
           }
+
+      # ─────────────────────────────────────────────
+      # 8. GUARDAR ESTADO EMPAREJADO
+      #    (se ejecuta incluso si cancelas la sesión,
+      #     para que el celular no vuelva a pedir PIN)
+      # ─────────────────────────────────────────────
+      - name: Detener Apollo
+        if: always()
+        shell: pwsh
+        run: |
+          Stop-Service -Name "ApolloService" -ErrorAction SilentlyContinue
+          Write-Host "Servicio ApolloService detenido para guardar el estado."
+
+      - name: Guardar estado emparejado de Apollo
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\Program Files\Apollo\config\sunshine_state.json
+            C:\Program Files\Apollo\config\sunshine.conf
+            C:\Program Files\Apollo\config\apps.json
+            C:\Program Files\Apollo\config\credentials
+          key: apollo-state-${{ github.run_id }}
